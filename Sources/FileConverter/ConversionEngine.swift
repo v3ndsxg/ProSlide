@@ -48,7 +48,7 @@ struct ConversionEngine {
         let process = Process()
         let errorPipe = Pipe()
         process.executableURL = executable
-        process.arguments = ["--headless", "--convert-to", "pdf", "--outdir", temporaryDirectory.path, source.path]
+        process.arguments = ["--headless", "--convert-to", "pdf", "--font-embed", job.options.fontEmbed ? "yes" : "no", "--outdir", temporaryDirectory.path, source.path]
         process.standardError = errorPipe
         process.standardOutput = errorPipe
 

@@ -69,6 +69,15 @@ struct ContentView: View {
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
             GridRow { Text("Resolution"); Picker("Resolution", selection: $job.options.resolution) { ForEach(ResolutionPreset.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }
             GridRow { Text("JPEG quality"); HStack { Slider(value: $job.options.quality, in: 0.5...1, step: 0.01); Text("\(Int(job.options.quality * 100))% ").monospacedDigit().frame(width: 42) } }
+            GridRow { 
+                Text("Font Rendering")
+                    .font(.headline)
+    
+                Picker("Embed Fonts", selection: $job.options.fontEmbed) { 
+                    Text("Yes (Recommended)").tag(true) 
+                    Text("No").tag(false)
+                }
+            }
             GridRow { Text("Export folder"); HStack { Text(job.options.destination.path).lineLimit(1).truncationMode(.middle); Button("Choose…") { showingDestinationPicker = true } } }
         }
         .frame(maxWidth: 620, alignment: .leading)
