@@ -86,7 +86,7 @@ struct ConversionEngine {
         // guarantees the reader sees EOF once the process exits (or never spawned).
         try? errorPipe.fileHandleForWriting.close()
 
-        let message = await messageTask.value
+        let message = try await messageTask.value
         if let startError { throw startError }
         guard process.terminationStatus == 0 else { throw ConversionError.libreOfficeFailed(message) }
 
