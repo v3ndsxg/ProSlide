@@ -1,12 +1,12 @@
 import Foundation
 
-enum ResolutionPreset: String, CaseIterable, Identifiable, Sendable {
+public enum ResolutionPreset: String, CaseIterable, Identifiable, Sendable {
     case hd = "HD (1280 px wide)"
     case fullHD = "Full HD (1920 px wide)"
     case fourK = "4K (3840 px wide)"
 
-    var id: String { rawValue }
-    var pixelWidth: Int {
+    public var id: String { rawValue }
+    public var pixelWidth: Int {
         switch self {
         case .hd: 1280
         case .fullHD: 1920
@@ -15,8 +15,8 @@ enum ResolutionPreset: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum BinStorage {
-    static var rootURL: URL {
+public enum BinStorage {
+    public static var rootURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("FileConverter", isDirectory: true)
         let bin = base.appendingPathComponent("Bin", isDirectory: true)
@@ -25,34 +25,41 @@ enum BinStorage {
     }
 }
 
-struct ConversionOptions: Sendable {
-    var quality: Double = 0.92
-    var resolution: ResolutionPreset = .fullHD
-    var destination: URL = BinStorage.rootURL
-    var fontEmbed: Bool = true
+public struct ConversionOptions: Sendable {
+    public var quality: Double
+    public var resolution: ResolutionPreset
+    public var destination: URL
+    public var fontEmbed: Bool
+
+    public init() {
+        quality = 0.92
+        resolution = .fullHD
+        destination = BinStorage.rootURL
+        fontEmbed = true
+    }
 }
 
-struct ConversionGroup: Identifiable, Equatable {
-    let id: UUID
-    let sourceName: String
-    let folderURL: URL
-    let imageURLs: [URL]
+public struct ConversionGroup: Identifiable, Equatable {
+    public let id: UUID
+    public let sourceName: String
+    public let folderURL: URL
+    public let imageURLs: [URL]
 
-    init(sourceName: String, folderURL: URL) {
+    public init(sourceName: String, folderURL: URL) {
         self.id = UUID()
         self.sourceName = sourceName
         self.folderURL = folderURL
         self.imageURLs = ConversionGroup.exportedImages(in: folderURL)
     }
 
-    static func exportedImages(in folder: URL) -> [URL] {
+    public static func exportedImages(in folder: URL) -> [URL] {
         (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?
             .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending } ?? []
     }
 }
 
-enum ConversionError: LocalizedError {
+public enum ConversionError: LocalizedError, Equatable {
     case unsupportedFile
     case libreOfficeUnavailable
     case libreOfficeFailed(String)
@@ -60,7 +67,7 @@ enum ConversionError: LocalizedError {
     case unreadablePDF
     case imageEncodingFailed
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .unsupportedFile: "Choose a PDF or PowerPoint (.pptx) file."
         case .libreOfficeUnavailable: "LibreOffice was not found. Install LibreOffice or choose a PDF."

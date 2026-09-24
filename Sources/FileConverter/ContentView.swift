@@ -1,4 +1,5 @@
 import AppKit
+import FileConverterCore
 import SwiftUI
 import UniformTypeIdentifiers
 

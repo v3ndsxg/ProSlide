@@ -4,8 +4,10 @@ import ImageIO
 import PDFKit
 import UniformTypeIdentifiers
 
-struct ConversionEngine {
-    func convert(
+public struct ConversionEngine {
+    public init() {}
+
+    public func convert(
         input: URL,
         options: ConversionOptions,
         progress: @escaping @Sendable (Double) async -> Void
