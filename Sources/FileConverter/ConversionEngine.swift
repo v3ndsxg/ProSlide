@@ -65,11 +65,11 @@ struct ConversionEngine {
         // Drain stdout/stderr concurrently so a chatty soffice run can never
         // fill the pipe buffer and deadlock the child while it is still running.
         let messageTask = Task {
-            var message = ""
-            for try await chunk in errorPipe.fileHandleForReading.bytes {
-                message += String(decoding: chunk, as: UTF8.self)
+            var bytes: [UInt8] = []
+            for try await byte in errorPipe.fileHandleForReading.bytes {
+                bytes.append(byte)
             }
-            return message
+            return String(decoding: bytes, as: UTF8.self)
         }
 
         var startError: Error?
@@ -152,7 +152,7 @@ struct ConversionEngine {
         NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: height)).fill()
         context.cgContext.saveGState()
         context.cgContext.scaleBy(x: scale, y: scale)
-        page.draw(with: .mediaBox, to: bounds)
+        page.draw(with: .mediaBox, to: context.cgContext)
         context.cgContext.restoreGState()
         NSGraphicsContext.restoreGraphicsState()
         guard let data = representation.representation(using: .jpeg, properties: [.compressionFactor: options.quality]) else {
