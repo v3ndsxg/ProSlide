@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
+import ImageIO
 import PDFKit
+import UniformTypeIdentifiers
 
 struct ConversionEngine {
     func convert(
@@ -138,26 +140,26 @@ struct ConversionEngine {
         let scale = CGFloat(options.resolution.pixelWidth) / bounds.width
         let width = max(1, Int((bounds.width * scale).rounded()))
         let height = max(1, Int((bounds.height * scale).rounded()))
-        guard let representation = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: false,
-            isPlanar: false, colorSpaceName: .deviceRGB,
-            bytesPerRow: 0, bitsPerPixel: 0
-        ), let context = NSGraphicsContext(bitmapImageRep: representation) else {
-            throw ConversionError.imageEncodingFailed
-        }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = context
-        NSColor.white.setFill()
-        NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: height)).fill()
-        context.cgContext.saveGState()
-        context.cgContext.scaleBy(x: scale, y: scale)
-        page.draw(with: .mediaBox, to: context.cgContext)
-        context.cgContext.restoreGState()
-        NSGraphicsContext.restoreGraphicsState()
-        guard let data = representation.representation(using: .jpeg, properties: [.compressionFactor: options.quality]) else {
-            throw ConversionError.imageEncodingFailed
-        }
-        try data.write(to: destination, options: .atomic)
+
+        guard let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { throw ConversionError.imageEncodingFailed }
+
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: scale, y: -scale)
+        page.draw(with: .mediaBox, to: context)
+
+        guard let cgImage = context.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(
+                  destination as CFURL, UTType.jpeg.identifier as CFString, 1, nil
+              ) else { throw ConversionError.imageEncodingFailed }
+        CGImageDestinationAddImage(dest, cgImage, [kCGImageDestinationLossyCompressionQuality: NSNumber(value: options.quality)] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { throw ConversionError.imageEncodingFailed }
     }
 }
