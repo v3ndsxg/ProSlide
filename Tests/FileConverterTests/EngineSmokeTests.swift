@@ -25,6 +25,7 @@ final class EngineSmokeTests: XCTestCase {
             let rep = try XCTUnwrap(NSBitmapImageRep(contentsOf: try XCTUnwrap(images.first)))
             XCTAssertEqual(rep.pixelsWide, 1280)
             XCTAssertEqual(rep.pixelsHigh, 960)
+            exportArtifacts(from: output, label: "pdf-\(images.first?.lastPathComponent ?? "page")")
 
             XCTAssertLessThan(brightness(rep.colorAt(x: 10, y: rep.pixelsHigh - 15)), 0.4,
                               "black marker should be at the visual top-left")
@@ -55,6 +56,7 @@ final class EngineSmokeTests: XCTestCase {
             XCTAssertEqual(images.count, 1, "expected a single JPEG slide")
             let rep = try XCTUnwrap(NSBitmapImageRep(contentsOf: try XCTUnwrap(images.first)))
             XCTAssertEqual(rep.pixelsWide, 1280)
+            exportArtifacts(from: output, label: "pptx-\(images.first?.lastPathComponent ?? "slide")")
 
             XCTAssertLessThan(brightness(rep.colorAt(x: 10, y: rep.pixelsHigh - 15)), 0.4,
                               "black slide shape should be at the visual top-left")
@@ -90,6 +92,18 @@ final class EngineSmokeTests: XCTestCase {
     private func brightness(_ color: NSColor?) -> CGFloat {
         guard let rgb = color?.usingColorSpace(.deviceRGB) else { return -1 }
         return (rgb.redComponent + rgb.greenComponent + rgb.blueComponent) / 3
+    }
+
+    /// If FILE_CONVERTER_ARTIFACTS is set (CI), copy the produced JPEGs
+    /// there so the golden pixels can be inspected after the run.
+    private func exportArtifacts(from directory: URL, label: String) {
+        guard let target = ProcessInfo.processInfo.environment["FILE_CONVERTER_ARTIFACTS"] else { return }
+        let destination = URL(fileURLWithPath: target, isDirectory: true)
+        try? FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        for url in jpegURLs(in: directory) {
+            let out = destination.appendingPathComponent("\(label)-\(url.lastPathComponent)")
+            try? FileManager.default.copyItem(at: url, to: out)
+        }
     }
 
     private func withTempDirectory(_ body: (URL) async throws -> Void) async throws {
