@@ -32,25 +32,26 @@ final class ConversionJob: ObservableObject {
         errorMessage = nil
 
         let scoped = inputURL.startAccessingSecurityScopedResource()
+        let job = self
         // Detached so page rendering and JPEG encoding never block the main thread.
-        Task.detached(priority: .userInitiated) { [options, weak self] in
+        Task.detached(priority: .userInitiated) { [options, inputURL, job] in
             defer {
                 if scoped { inputURL.stopAccessingSecurityScopedResource() }
             }
             do {
                 let output = try await ConversionEngine().convert(input: inputURL, options: options) { value in
-                    await MainActor.run { self?.progress = value }
+                    await MainActor.run { job.progress = value }
                 }
                 print("✓ Conversion completed successfully: \(output)")
                 await MainActor.run {
-                    self?.reloadBin()
-                    self?.isConverting = false
+                    job.reloadBin()
+                    job.isConverting = false
                 }
             } catch {
                 print("✗ Conversion failed: \(error)")
                 await MainActor.run {
-                    self?.errorMessage = error.localizedDescription
-                    self?.isConverting = false
+                    job.errorMessage = error.localizedDescription
+                    job.isConverting = false
                 }
             }
         }
