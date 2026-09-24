@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 @MainActor
@@ -7,26 +8,13 @@ final class ConversionJob: ObservableObject {
     @Published var progress: Double = 0
     @Published var isConverting = false
     @Published var errorMessage: String?
-    @Published var outputURL: URL?
+    @Published private(set) var groups: [ConversionGroup] = []
 
-    struct ConversionOptions {
-    var quality: Double = 0.92
-    var resolution: ResolutionPreset = .fullHD
-    var destination: URL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-    var fontEmbed: Bool = true
-    
-    enum ResolutionPreset {
-        case hd, fullHD, fourK
-        var pixelWidth: Int {
-            switch self {
-            case .hd: return 1280
-            case .fullHD: return 1920
-            case .fourK: return 3840
-            }
-        }
+    private let fileManager = FileManager.default
+
+    init() {
+        reloadBin()
     }
-}
-
 
     func accept(_ url: URL) {
         guard ["pdf", "pptx"].contains(url.pathExtension.lowercased()) else {
@@ -34,7 +22,6 @@ final class ConversionJob: ObservableObject {
             return
         }
         inputURL = url
-        outputURL = nil
         errorMessage = nil
     }
 
@@ -43,33 +30,65 @@ final class ConversionJob: ObservableObject {
         isConverting = true
         progress = 0
         errorMessage = nil
-        outputURL = nil
-    
-        // Add logging for debugging font issues
-        print("Starting conversion with options: \(options)")
-    
-        Task {
+
+        let scoped = inputURL.startAccessingSecurityScopedResource()
+        // Detached so page rendering and JPEG encoding never block the main thread.
+        Task.detached(priority: .userInitiated) { [options, weak self] in
+            defer {
+                if scoped { inputURL.stopAccessingSecurityScopedResource() }
+            }
             do {
-                let output = try await ConversionEngine().convert(input: inputURL, options: options) { [weak self] value in
+                let output = try await ConversionEngine().convert(input: inputURL, options: options) { value in
                     await MainActor.run { self?.progress = value }
                 }
-                outputURL = output
-            
-                // Log success with font info if available
-                print("✓ Conversion completed successfully")
-            } catch {
-                errorMessage = error.localizedDescription
-            
-                // Add specific error messages for common issues
-                if error.localizedDescription.contains("font") || 
-                    error.localizedDescription.contains("substitution") {
-                    errorMessage += " - Font rendering may have been substituted"
+                print("✓ Conversion completed successfully: \(output)")
+                await MainActor.run {
+                    self?.reloadBin()
+                    self?.isConverting = false
                 }
-            
+            } catch {
                 print("✗ Conversion failed: \(error)")
+                await MainActor.run {
+                    self?.errorMessage = error.localizedDescription
+                    self?.isConverting = false
+                }
             }
-        
-            isConverting = false
         }
     }
 
+    func save(group: ConversionGroup, to destination: URL) throws {
+        let scoped = destination.startAccessingSecurityScopedResource()
+        defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        for image in group.imageURLs {
+            let target = destination.appendingPathComponent(image.lastPathComponent)
+            try? fileManager.removeItem(at: target)
+            try fileManager.copyItem(at: image, to: target)
+        }
+    }
+
+    func clearBin() throws {
+        for folder in groups.map(\.folderURL) {
+            try fileManager.removeItem(at: folder)
+        }
+        reloadBin()
+    }
+
+    func openGroup(_ group: ConversionGroup) {
+        NSWorkspace.shared.open(group.folderURL)
+    }
+
+    func openBin() {
+        NSWorkspace.shared.open(BinStorage.rootURL)
+    }
+
+    private func reloadBin() {
+        let folders = (try? fileManager.contentsOfDirectory(at: BinStorage.rootURL, includingPropertiesForKeys: nil))?
+            .filter { $0.hasDirectoryPath }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedDescending } ?? []
+        groups = folders.compactMap { folder in
+            guard !ConversionGroup.exportedImages(in: folder).isEmpty else { return nil }
+            return ConversionGroup(sourceName: folder.lastPathComponent, folderURL: folder)
+        }
+    }
+}

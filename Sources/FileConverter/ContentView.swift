@@ -5,10 +5,44 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject private var job: ConversionJob
     @State private var showingImporter = false
-    @State private var showingDestinationPicker = false
+    @State private var showingSaveImporter = false
+    @State private var saveTarget: ConversionGroup?
+    @State private var confirmingClear = false
     @State private var isTargeted = false
 
     var body: some View {
+        HStack(spacing: 0) {
+            mainPane
+            if !job.groups.isEmpty {
+                Divider()
+                binPanel
+            }
+        }
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.pdf, UTType(filenameExtension: "pptx")!]) { result in
+            if case .success(let url) = result { job.accept(url) }
+        }
+        .fileImporter(isPresented: $showingSaveImporter, allowedContentTypes: [.folder]) { result in
+            guard case .success(let url) = result, let group = saveTarget else { return }
+            saveTarget = nil
+            do {
+                try job.save(group: group, to: url)
+            } catch {
+                job.errorMessage = error.localizedDescription
+            }
+        }
+        .confirmationDialog("Clear all converted images from the bin?", isPresented: $confirmingClear, titleVisibility: .visible) {
+            Button("Clear Bin", role: .destructive) {
+                do {
+                    try job.clearBin()
+                } catch {
+                    job.errorMessage = error.localizedDescription
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var mainPane: some View {
         VStack(spacing: 18) {
             Text("File Converter").font(.largeTitle.weight(.semibold))
             Text("Turn PDFs and PowerPoint slides into dependable JPEG images.")
@@ -24,7 +58,6 @@ struct ContentView: View {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red).frame(maxWidth: 560)
             }
-            outputShelf
             Spacer(minLength: 0)
             HStack {
                 Text("PowerPoint files are rendered through LibreOffice.")
@@ -36,12 +69,7 @@ struct ContentView: View {
             }
         }
         .padding(28)
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.pdf, UTType(filenameExtension: "pptx")!]) { result in
-            if case .success(let url) = result { job.accept(url) }
-        }
-        .fileImporter(isPresented: $showingDestinationPicker, allowedContentTypes: [.folder]) { result in
-            if case .success(let url) = result { job.options.destination = url }
-        }
+        .frame(maxWidth: .infinity)
     }
 
     private var dropZone: some View {
@@ -69,59 +97,70 @@ struct ContentView: View {
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
             GridRow { Text("Resolution"); Picker("Resolution", selection: $job.options.resolution) { ForEach(ResolutionPreset.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden() }
             GridRow { Text("JPEG quality"); HStack { Slider(value: $job.options.quality, in: 0.5...1, step: 0.01); Text("\(Int(job.options.quality * 100))% ").monospacedDigit().frame(width: 42) } }
-            GridRow { 
+            GridRow {
                 Text("Font Rendering")
-                    .font(.headline)
-    
-                Picker("Embed Fonts", selection: $job.options.fontEmbed) { 
-                    Text("Yes (Recommended)").tag(true) 
+                Picker("Embed Fonts", selection: $job.options.fontEmbed) {
+                    Text("Yes (Recommended)").tag(true)
                     Text("No").tag(false)
                 }
             }
-            GridRow { Text("Export folder"); HStack { Text(job.options.destination.path).lineLimit(1).truncationMode(.middle); Button("Choose…") { showingDestinationPicker = true } } }
         }
         .frame(maxWidth: 620, alignment: .leading)
     }
 
-    @ViewBuilder private var outputShelf: some View {
-        if let output = job.outputURL {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Export ready — drag images directly into ProPresenter").font(.headline)
-                HStack {
-                    Image(systemName: "photo.stack").foregroundStyle(.accent)
-                    Text(output.lastPathComponent).lineLimit(1)
-                    Spacer()
-                    Button("Open Folder") { NSWorkspace.shared.open(output) }
-                }
-                ScrollView(.horizontal, showsIndicators: true) {
-                    HStack(spacing: 10) {
-                        ForEach(exportedImages(in: output), id: \.self) { imageURL in
-                            VStack(spacing: 4) {
-                                if let image = NSImage(contentsOf: imageURL) {
-                                    Image(nsImage: image)
-                                        .resizable().scaledToFit()
-                                        .frame(width: 96, height: 54)
-                                } else {
-                                    Image(systemName: "photo").frame(width: 96, height: 54)
-                                }
-                                Text(imageURL.lastPathComponent).font(.caption2).lineLimit(1)
-                            }
-                            .frame(width: 104)
-                            .onDrag { NSItemProvider(object: imageURL as NSURL) }
-                        }
-                    }.padding(.vertical, 2)
-                }
-                Text("Drag JPEGs from this Finder folder directly into ProPresenter.")
-                    .font(.caption).foregroundStyle(.secondary)
+    private var binPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Bin", systemImage: "photo.stack").font(.headline)
+                Spacer()
+                Button("Open Folder") { job.openBin() }
+                Button("Clear", role: .destructive) { confirmingClear = true }
             }
-            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.green.opacity(0.1)).clipShape(RoundedRectangle(cornerRadius: 10))
+            Text("Drag a document's JPEGs straight into ProPresenter, or open its folder to drag the whole set in.")
+                .font(.caption).foregroundStyle(.secondary)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(job.groups) { group in
+                        binGroup(group)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
         }
+        .padding(14)
+        .frame(width: 460)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color.secondary.opacity(0.06))
     }
 
-    private func exportedImages(in folder: URL) -> [URL] {
-        (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?
-            .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending } ?? []
+    private func binGroup(_ group: ConversionGroup) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(group.sourceName).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Spacer()
+                Text("\(group.imageURLs.count) images").font(.caption).foregroundStyle(.secondary)
+                Button("Open") { job.openGroup(group) }
+                Button("Save…") { saveTarget = group; showingSaveImporter = true }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
+                ForEach(group.imageURLs, id: \.self) { imageURL in
+                    VStack(spacing: 4) {
+                        if let image = NSImage(contentsOf: imageURL) {
+                            Image(nsImage: image)
+                                .resizable().scaledToFit()
+                                .frame(width: 96, height: 54)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                        } else {
+                            Image(systemName: "photo").frame(width: 96, height: 54)
+                        }
+                        Text(imageURL.lastPathComponent).font(.caption2).lineLimit(1)
+                    }
+                    .onDrag { NSItemProvider(object: imageURL as NSURL) }
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.green.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 }

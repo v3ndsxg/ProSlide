@@ -21,7 +21,7 @@ struct ConversionEngine {
         let pdfURL: URL
         if extensionName == "pptx" {
             await progress(0.05)
-            pdfURL = try await makePDF(from: input, temporaryDirectory: temporaryDirectory)
+            pdfURL = try await makePDF(from: input, options: options, temporaryDirectory: temporaryDirectory)
         } else {
             pdfURL = input
         }
@@ -43,24 +43,51 @@ struct ConversionEngine {
         return outputDirectory
     }
 
-    private func makePDF(from source: URL, temporaryDirectory: URL) async throws -> URL {
+    private func makePDF(from source: URL, options: ConversionOptions, temporaryDirectory: URL) async throws -> URL {
         let executable = try libreOfficeExecutable()
         let process = Process()
         let errorPipe = Pipe()
         process.executableURL = executable
-        process.arguments = ["--headless", "--convert-to", "pdf", "--font-embed", job.options.fontEmbed ? "yes" : "no", "--outdir", temporaryDirectory.path, source.path]
+        let fontEmbedding = options.fontEmbed ? "true" : "false"
+        let convertTo = "pdf:writer_pdf_Export:{\"EmbedFonts\":{\"type\":\"boolean\",\"value\":\"\(fontEmbedding)\"}}"
+        let profileDirectory = temporaryDirectory.appendingPathComponent("LibreOffice-Profile", isDirectory: true)
+        try FileManager.default.createDirectory(at: profileDirectory, withIntermediateDirectories: true)
+        process.arguments = [
+            "--headless",
+            "-env:UserInstallation=\(profileDirectory.absoluteString)",
+            "--convert-to", convertTo,
+            "--outdir", temporaryDirectory.path,
+            source.path
+        ]
         process.standardError = errorPipe
         process.standardOutput = errorPipe
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        // Drain stdout/stderr concurrently so a chatty soffice run can never
+        // fill the pipe buffer and deadlock the child while it is still running.
+        let messageTask = Task {
+            var message = ""
+            for try await chunk in errorPipe.fileHandleForReading.bytes {
+                message += String(decoding: chunk, as: UTF8.self)
+            }
+            return message
+        }
+
+        var startError: Error?
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             process.terminationHandler = { _ in continuation.resume() }
             do {
                 try process.run()
             } catch {
-                continuation.resume(throwing: error)
+                startError = error
+                continuation.resume()
             }
         }
-        let message = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        // The child has inherited its own copy of the write end; closing ours
+        // guarantees the reader sees EOF once the process exits (or never spawned).
+        try? errorPipe.fileHandleForWriting.close()
+
+        let message = await messageTask.value
+        if let startError { throw startError }
         guard process.terminationStatus == 0 else { throw ConversionError.libreOfficeFailed(message) }
 
         let expected = temporaryDirectory.appendingPathComponent(source.deletingPathExtension().lastPathComponent + ".pdf")
@@ -108,7 +135,7 @@ struct ConversionEngine {
 
     private func render(page: PDFPage, to destination: URL, options: ConversionOptions) throws {
         let bounds = page.bounds(for: .mediaBox)
-        let scale = options.resolution.pixelWidth.map { CGFloat($0) / bounds.width } ?? 2
+        let scale = CGFloat(options.resolution.pixelWidth) / bounds.width
         let width = max(1, Int((bounds.width * scale).rounded()))
         let height = max(1, Int((bounds.height * scale).rounded()))
         guard let representation = NSBitmapImageRep(

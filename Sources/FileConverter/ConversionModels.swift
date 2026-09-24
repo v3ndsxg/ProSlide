@@ -1,6 +1,6 @@
 import Foundation
 
-enum ResolutionPreset: String, CaseIterable, Identifiable {
+enum ResolutionPreset: String, CaseIterable, Identifiable, Sendable {
     case hd = "HD (1280 px wide)"
     case fullHD = "Full HD (1920 px wide)"
     case fourK = "4K (3840 px wide)"
@@ -15,11 +15,41 @@ enum ResolutionPreset: String, CaseIterable, Identifiable {
     }
 }
 
-struct ConversionOptions {
+enum BinStorage {
+    static var rootURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("FileConverter", isDirectory: true)
+        let bin = base.appendingPathComponent("Bin", isDirectory: true)
+        try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        return bin
+    }
+}
+
+struct ConversionOptions: Sendable {
     var quality: Double = 0.92
     var resolution: ResolutionPreset = .fullHD
-    var destination: URL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
+    var destination: URL = BinStorage.rootURL
     var fontEmbed: Bool = true
+}
+
+struct ConversionGroup: Identifiable, Equatable {
+    let id: UUID
+    let sourceName: String
+    let folderURL: URL
+    let imageURLs: [URL]
+
+    init(sourceName: String, folderURL: URL) {
+        self.id = UUID()
+        self.sourceName = sourceName
+        self.folderURL = folderURL
+        self.imageURLs = ConversionGroup.exportedImages(in: folderURL)
+    }
+
+    static func exportedImages(in folder: URL) -> [URL] {
+        (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil))?
+            .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending } ?? []
+    }
 }
 
 enum ConversionError: LocalizedError {

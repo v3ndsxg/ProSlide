@@ -8,7 +8,7 @@ struct FileConverterApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(job)
-                .frame(minWidth: 760, minHeight: 590)
+                .frame(minWidth: 1180, minHeight: 640)
         }
         .windowStyle(.titleBar)
     }
