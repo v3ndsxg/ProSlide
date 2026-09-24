@@ -16,7 +16,8 @@ let package = Package(
         ),
         .testTarget(
             name: "FileConverterTests",
-            dependencies: ["FileConverterCore"]
+            dependencies: ["FileConverterCore"],
+            exclude: ["Fixtures"]
         )
     ]
 )

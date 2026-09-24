@@ -22,17 +22,18 @@ final class EngineSmokeTests: XCTestCase {
 
             let images = jpegURLs(in: output)
             XCTAssertEqual(images.count, 1, "expected a single JPEG page")
-            let rep = try XCTUnwrap(NSBitmapImageRep(contentsOf: try XCTUnwrap(images.first)))
+            let jpegURL = try XCTUnwrap(images.first)
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: jpegURL)))
             XCTAssertEqual(rep.pixelsWide, 1280)
             XCTAssertEqual(rep.pixelsHigh, 960)
             exportArtifacts(from: output, label: "pdf-\(images.first?.lastPathComponent ?? "page")")
 
-            XCTAssertLessThan(brightness(rep.colorAt(x: 10, y: rep.pixelsHigh - 15)), 0.4,
-                              "black marker should be at the visual top-left")
-            XCTAssertGreaterThan(brightness(rep.colorAt(x: 10, y: 10)), 0.8,
-                                 "visual bottom-left should be white")
-            XCTAssertGreaterThan(brightness(rep.colorAt(x: rep.pixelsWide - 15, y: rep.pixelsHigh - 15)), 0.8,
-                                 "visual top-right should be white")
+            let topLeft = brightness(rep.colorAt(x: 10, y: rep.pixelsHigh - 15))
+            let bottomLeft = brightness(rep.colorAt(x: 10, y: 10))
+            let topRight = brightness(rep.colorAt(x: rep.pixelsWide - 15, y: rep.pixelsHigh - 15))
+            XCTAssertLessThan(topLeft, 0.4, "black marker should be at the visual top-left; got \(topLeft)")
+            XCTAssertGreaterThan(bottomLeft, 0.8, "visual bottom-left should be white; got \(bottomLeft)")
+            XCTAssertGreaterThan(topRight, 0.8, "visual top-right should be white; got \(topRight)")
         }
     }
 
@@ -54,14 +55,15 @@ final class EngineSmokeTests: XCTestCase {
 
             let images = jpegURLs(in: output)
             XCTAssertEqual(images.count, 1, "expected a single JPEG slide")
-            let rep = try XCTUnwrap(NSBitmapImageRep(contentsOf: try XCTUnwrap(images.first)))
+            let jpegURL = try XCTUnwrap(images.first)
+            let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: jpegURL)))
             XCTAssertEqual(rep.pixelsWide, 1280)
             exportArtifacts(from: output, label: "pptx-\(images.first?.lastPathComponent ?? "slide")")
 
-            XCTAssertLessThan(brightness(rep.colorAt(x: 10, y: rep.pixelsHigh - 15)), 0.4,
-                              "black slide shape should be at the visual top-left")
-            XCTAssertGreaterThan(brightness(rep.colorAt(x: 10, y: 10)), 0.8,
-                                 "visual bottom-left should be white")
+            let topLeft = brightness(rep.colorAt(x: 10, y: rep.pixelsHigh - 15))
+            let bottomLeft = brightness(rep.colorAt(x: 10, y: 10))
+            XCTAssertLessThan(topLeft, 0.4, "black slide shape should be at the visual top-left; got \(topLeft)")
+            XCTAssertGreaterThan(bottomLeft, 0.8, "visual bottom-left should be white; got \(bottomLeft)")
         }
     }
 

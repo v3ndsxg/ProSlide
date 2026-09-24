@@ -12,6 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Pin Xcode 16.4 (deterministic SDK)
+        run: |
+          [ -d /Applications/Xcode_16.4.app ] || { echo "Xcode_16.4.app missing"; exit 1; }
+          sudo xcode-select -s /Applications/Xcode_16.4.app
+          xcodebuild -version
+
       - name: Swift version
         run: swift --version
 
