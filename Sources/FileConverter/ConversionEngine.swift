@@ -151,8 +151,7 @@ struct ConversionEngine {
         context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
 
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: scale, y: -scale)
+        context.scaleBy(x: scale, y: scale)
         page.draw(with: .mediaBox, to: context)
 
         guard let cgImage = context.makeImage(),
