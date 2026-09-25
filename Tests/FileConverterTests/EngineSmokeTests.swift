@@ -1,69 +1,34 @@
-import AppKit
+import CoreGraphics
 import FileConverterCore
+import ImageIO
 import XCTest
 
 final class EngineSmokeTests: XCTestCase {
 
-    /// sample.pdf is 800x600 with a solid black square in the visual
-    /// top-left corner (PDF y-up space) and a gray square bottom-right.
-    /// After rendering, the black square must appear at the image's
-    /// top-left; any flip/mirror in the render transform moves it and
-    /// the assertions below fail.
+    /// sample.pdf is a 1280x720 (16:9) page with a solid black square in
+    /// the visual top-left corner (PDF y-up space) and a gray square
+    /// bottom-right. After rendering, the black square must appear at the
+    /// image's top-left; any flip/mirror in the render transform moves it
+    /// and the corner assertions below fail.
     func testPDFConversionProducesUprightJPEGs() async throws {
-        try await withTempDirectory { directory in
-            var options = ConversionOptions()
-            options.resolution = .hd
-            options.destination = directory
-
-            let output = try await ConversionEngine().convert(
-                input: fixture(named: "sample.pdf"),
-                options: options
-            ) { _ in }
-
-            let images = jpegURLs(in: output)
-            XCTAssertEqual(images.count, 1, "expected a single JPEG page")
-            let jpegURL = try XCTUnwrap(images.first)
-            let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: jpegURL)))
-            XCTAssertEqual(rep.pixelsWide, 1280)
-            XCTAssertEqual(rep.pixelsHigh, 960)
-            exportArtifacts(from: output, label: "pdf-\(images.first?.lastPathComponent ?? "page")")
-
-            let topLeft = brightness(rep.colorAt(x: 10, y: rep.pixelsHigh - 15))
-            let bottomLeft = brightness(rep.colorAt(x: 10, y: 10))
-            let topRight = brightness(rep.colorAt(x: rep.pixelsWide - 15, y: rep.pixelsHigh - 15))
-            XCTAssertLessThan(topLeft, 0.4, "black marker should be at the visual top-left; got \(topLeft)")
-            XCTAssertGreaterThan(bottomLeft, 0.8, "visual bottom-left should be white; got \(bottomLeft)")
-            XCTAssertGreaterThan(topRight, 0.8, "visual top-right should be white; got \(topRight)")
+        for preset in ResolutionPreset.allCases {
+            try await assertConversionOf(
+                kind: "pdf", file: "sample.pdf", preset: preset,
+                canvasWidth: 1280, canvasHeight: 720
+            )
         }
     }
 
-    /// sample.pptx is a single blank slide with a black rectangle in its
-    /// top-left. The full chain — LibreOffice -> PDF -> JPEG — must keep
-    /// that rectangle at the JPEG's top-left.
+    /// sample.pptx is a single blank 16:9 slide (13.33x7.5 in) with a
+    /// black rectangle in its top-left. The full chain — LibreOffice ->
+    /// PDF -> JPEG — must keep that rectangle at the JPEG's top-left.
     func testPPTXConversionProducesUprightJPEGs() async throws {
         try XCTSkipUnless(hasLibreOffice(), "LibreOffice is not installed; skipping PPTX path")
-
-        try await withTempDirectory { directory in
-            var options = ConversionOptions()
-            options.resolution = .hd
-            options.destination = directory
-
-            let output = try await ConversionEngine().convert(
-                input: fixture(named: "sample.pptx"),
-                options: options
-            ) { _ in }
-
-            let images = jpegURLs(in: output)
-            XCTAssertEqual(images.count, 1, "expected a single JPEG slide")
-            let jpegURL = try XCTUnwrap(images.first)
-            let rep = try XCTUnwrap(NSBitmapImageRep(data: try Data(contentsOf: jpegURL)))
-            XCTAssertEqual(rep.pixelsWide, 1280)
-            exportArtifacts(from: output, label: "pptx-\(images.first?.lastPathComponent ?? "slide")")
-
-            let topLeft = brightness(rep.colorAt(x: 10, y: rep.pixelsHigh - 15))
-            let bottomLeft = brightness(rep.colorAt(x: 10, y: 10))
-            XCTAssertLessThan(topLeft, 0.4, "black slide shape should be at the visual top-left; got \(topLeft)")
-            XCTAssertGreaterThan(bottomLeft, 0.8, "visual bottom-left should be white; got \(bottomLeft)")
+        for preset in ResolutionPreset.allCases {
+            try await assertConversionOf(
+                kind: "pptx", file: "sample.pptx", preset: preset,
+                canvasWidth: 960, canvasHeight: 540
+            )
         }
     }
 
@@ -73,9 +38,96 @@ final class EngineSmokeTests: XCTestCase {
         do {
             _ = try await ConversionEngine().convert(input: url, options: ConversionOptions()) { _ in }
             XCTFail("expected unsupportedFile to be thrown")
-        } catch let error as ConversionError {
-            XCTAssertEqual(error, .unsupportedFile)
+        } catch {
+            XCTAssertEqual(error as? ConversionError, .unsupportedFile)
         }
+    }
+
+    private func assertConversionOf(
+        kind: String, file: String, preset: ResolutionPreset,
+        canvasWidth: Int, canvasHeight: Int
+    ) async throws {
+        try await withTempDirectory { directory in
+            var options = ConversionOptions()
+            options.resolution = preset
+            options.destination = directory
+
+            let output = try await ConversionEngine().convert(
+                input: fixture(named: file),
+                options: options
+            ) { _ in }
+
+            let images = jpegURLs(in: output)
+            XCTAssertEqual(images.count, 1, "[\(preset.rawValue)] expected a single JPEG")
+            let probe = try probeCorners(of: try XCTUnwrap(images.first))
+
+            let expectedWidth = preset.pixelWidth
+            let expectedHeight = Int((Double(canvasHeight) * Double(preset.pixelWidth) / Double(canvasWidth)).rounded())
+            XCTAssertEqual(probe.width, expectedWidth, "[\(preset.rawValue)] JPEG width")
+            XCTAssertEqual(probe.height, expectedHeight, "[\(preset.rawValue)] JPEG height")
+
+            exportArtifacts(from: output, label: "\(kind)-\(preset)")
+
+            XCTAssertLessThan(probe.topLeft, 0.4,
+                              "[\(preset.rawValue)] black marker should be at the visual top-left; got \(probe.topLeft)")
+            XCTAssertGreaterThan(probe.bottomLeft, 0.8,
+                                 "[\(preset.rawValue)] visual bottom-left should be white; got \(probe.bottomLeft)")
+            XCTAssertGreaterThan(probe.topRight, 0.8,
+                                 "[\(preset.rawValue)] visual top-right should be white; got \(probe.topRight)")
+        }
+    }
+
+    private struct CornerProbe {
+        let width: Int
+        let height: Int
+        let topLeft: Double
+        let bottomLeft: Double
+        let topRight: Double
+    }
+
+    /// Decode the JPEG via ImageIO, draw it into a fresh RGBA bitmap
+    /// context, and read the raw bytes where row 0 is always the visual
+    /// top of the image (the standard CGImage roundtrip is orientation
+    /// preserving). This avoids NSBitmapImageRep coordinate quirks, so the
+    /// assertions describe exactly what a viewer/ProPresenter will show.
+    private func probeCorners(of url: URL) throws -> CornerProbe {
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let image = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let width = image.width
+        let height = image.height
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
+        var drew = false
+        var topLeft = 0.0
+        var bottomLeft = 0.0
+        var topRight = 0.0
+        pixels.withUnsafeMutableBytes { buffer in
+            guard let base = buffer.baseAddress,
+                  let context = CGContext(
+                      data: base, width: width, height: height,
+                      bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+                      space: CGColorSpaceCreateDeviceRGB(),
+                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+                  ) else { return }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            drew = true
+            let bytes = base.assumingMemoryBound(to: UInt8.self)
+            func brightness(x: Int, y: Int) -> Double {
+                let offset = y * bytesPerRow + x * 4
+                return (Double(bytes[offset]) + Double(bytes[offset + 1]) + Double(bytes[offset + 2])) / 765.0
+            }
+            topLeft = brightness(x: 10, y: 5)
+            bottomLeft = brightness(x: 10, y: height - 5)
+            topRight = brightness(x: width - 15, y: 5)
+        }
+        XCTAssertTrue(drew, "could not create the bitmap context for the corner probe")
+        return CornerProbe(
+            width: width,
+            height: height,
+            topLeft: topLeft,
+            bottomLeft: bottomLeft,
+            topRight: topRight
+        )
     }
 
     private func fixture(named name: String) -> URL {
@@ -89,11 +141,6 @@ final class EngineSmokeTests: XCTestCase {
         (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))?
             .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
-    }
-
-    private func brightness(_ color: NSColor?) -> CGFloat {
-        guard let rgb = color?.usingColorSpace(.deviceRGB) else { return -1 }
-        return (rgb.redComponent + rgb.greenComponent + rgb.blueComponent) / 3
     }
 
     /// If FILE_CONVERTER_ARTIFACTS is set (CI), copy the produced JPEGs
