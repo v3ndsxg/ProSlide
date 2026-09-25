@@ -34,6 +34,10 @@ public struct ConversionEngine {
         guard let document = PDFDocument(url: pdfURL), document.pageCount > 0 else {
             throw ConversionError.unreadablePDF
         }
+        let maxPageCount = 300
+        guard document.pageCount <= maxPageCount else {
+            throw ConversionError.tooManyPages(document.pageCount)
+        }
 
         let outputDirectory = try makeOutputDirectory(for: input, in: options.destination)
         for index in 0..<document.pageCount {
@@ -133,13 +137,21 @@ public struct ConversionEngine {
     }
 
     private func safeFilenameStem(_ name: String) -> String {
-        let invalid = CharacterSet(charactersIn: "/:\\?%*|\"")
-        return name.components(separatedBy: invalid).joined(separator: "-")
+        var invalid = CharacterSet(charactersIn: "/:\\?%*|\"")
+        invalid.formUnion(.controlCharacters)
+        let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
+        let collapsed = cleaned.split(whereSeparator: { $0.isWhitespace }).joined(separator: "-")
+        let trimmed = collapsed.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        return trimmed.isEmpty ? "document" : trimmed
     }
 
     private func render(page: PDFPage, to destination: URL, options: ConversionOptions) throws {
         let bounds = page.bounds(for: .mediaBox)
-        let scale = CGFloat(options.resolution.pixelWidth) / bounds.width
+        let maxPixelDimension = 8192
+        let scale = min(
+            CGFloat(options.resolution.pixelWidth) / bounds.width,
+            CGFloat(maxPixelDimension) / max(bounds.width, bounds.height)
+        )
         let width = max(1, Int((bounds.width * scale).rounded()))
         let height = max(1, Int((bounds.height * scale).rounded()))
 

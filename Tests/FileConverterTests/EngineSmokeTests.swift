@@ -43,6 +43,28 @@ final class EngineSmokeTests: XCTestCase {
         }
     }
 
+    /// A hostile PDF declaring a pathological page aspect ratio (tiny width,
+    /// enormous height) must not scale up into a multi-gigabyte bitmap.
+    /// render() clamps both output sides to at most 8192 px.
+    func testPathologicalPDFDimensionsAreClamped() async throws {
+        let pdf = try makePathologicalPDF(pageWidth: 200, pageHeight: 100_000)
+        defer { try? FileManager.default.removeItem(at: pdf) }
+
+        try await withTempDirectory { directory in
+            var options = ConversionOptions()
+            options.resolution = .fullHD
+            options.destination = directory
+
+            let output = try await ConversionEngine().convert(input: pdf, options: options) { _ in }
+            let probe = try probeCorners(of: try XCTUnwrap(jpegURLs(in: output).first))
+
+            XCTAssertGreaterThan(probe.width, 0)
+            XCTAssertGreaterThan(probe.height, 0)
+            XCTAssertLessThanOrEqual(probe.width, 8192, "width must be clamped to 8192")
+            XCTAssertLessThanOrEqual(probe.height, 8192, "height must be clamped to 8192")
+        }
+    }
+
     private func assertConversionOf(
         kind: String, file: String, preset: ResolutionPreset,
         canvasWidth: Int, canvasHeight: Int
@@ -141,6 +163,20 @@ final class EngineSmokeTests: XCTestCase {
         (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))?
             .filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent } ?? []
+    }
+
+    private func makePathologicalPDF(pageWidth: CGFloat, pageHeight: CGFloat) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Pathological-\(UUID().uuidString).pdf")
+        var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
+        guard let consumer = CGDataConsumer(url: url as CFURL),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            throw XCTSkip("could not create a PDF context for the pathological fixture")
+        }
+        context.beginPDFPage(nil)
+        context.endPDFPage()
+        context.closePDF()
+        return url
     }
 
     /// If FILE_CONVERTER_ARTIFACTS is set (CI), copy the produced JPEGs

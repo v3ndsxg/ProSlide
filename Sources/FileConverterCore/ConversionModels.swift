@@ -65,6 +65,7 @@ public enum ConversionError: LocalizedError, Equatable {
     case libreOfficeFailed(String)
     case noPDFProduced
     case unreadablePDF
+    case tooManyPages(Int)
     case imageEncodingFailed
 
     public var errorDescription: String? {
@@ -74,6 +75,7 @@ public enum ConversionError: LocalizedError, Equatable {
         case .libreOfficeFailed(let detail): "LibreOffice could not convert this PowerPoint file. \(detail)"
         case .noPDFProduced: "LibreOffice finished without producing a PDF."
         case .unreadablePDF: "The PDF could not be opened."
+        case .tooManyPages(let count): "This PDF has \(count) pages, which exceeds the 300-page limit."
         case .imageEncodingFailed: "A page could not be encoded as a JPEG."
         }
     }
