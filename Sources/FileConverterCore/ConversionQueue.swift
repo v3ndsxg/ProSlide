@@ -33,7 +33,10 @@ public final class ConversionQueue: ObservableObject {
 
     public var binRootURL: URL { BinStorage.rootURL }
 
-    private let convert: ConvertOperation
+    /// The single-file conversion injected by the initialiser. Deliberately
+    /// not named `convert`: a stored property and a `convert()` method cannot
+    /// share a name in one type.
+    private let convertOne: ConvertOperation
     private var runTask: Task<Void, Never>?
     private var temporaryProfile: URL?
 
@@ -60,7 +63,7 @@ public final class ConversionQueue: ObservableObject {
     }
     init(options: ConversionOptions, convert: @escaping ConvertOperation) {
         self.options = options
-        self.convert = convert
+        self.convertOne = convert
     }
 
     // MARK: - Input
@@ -140,7 +143,7 @@ public final class ConversionQueue: ObservableObject {
         let batch = items.map(\.id)
         let profile = makeTemporaryProfile()
         temporaryProfile = profile
-        let convert = self.convert
+        let convertOne = self.convertOne
 
         runTask = Task(priority: .userInitiated) { [weak self] in
             for (offset, id) in batch.enumerated() {
@@ -151,7 +154,7 @@ public final class ConversionQueue: ObservableObject {
 
                 self.items[index].status = .converting
                 do {
-                    let folder = try await convert(url, self.options, profile) { [weak self] fraction in
+                    let folder = try await convertOne(url, self.options, profile) { [weak self] fraction in
                         let value = ConversionQueue.aggregateProgress(
                             offset: offset, fraction: fraction, total: batch.count
                         )
