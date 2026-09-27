@@ -7,11 +7,15 @@ import UniformTypeIdentifiers
 public struct ConversionEngine {
     public init() {}
 
+    /// - Parameter progress: called as rendering proceeds, 0 to 1. It is only
+    ///   ever called from this function and never stored, so it is deliberately
+    ///   non-escaping: that lets `ConversionQueue` hand its own injected
+    ///   callback straight through without it becoming an escaping capture.
     public func convert(
         input: URL,
         options: ConversionOptions,
         profileDirectory: URL? = nil,
-        progress: @escaping @Sendable (Double) async -> Void
+        progress: @Sendable (Double) async -> Void
     ) async throws -> URL {
         let extensionName = input.pathExtension.lowercased()
         guard extensionName == "pdf" || extensionName == "pptx" else {
