@@ -32,6 +32,14 @@ final class EngineSmokeTests: XCTestCase {
         }
     }
 
+    /// The app ships without a quality control on purpose, so the default must
+    /// sit at ImageIO's ceiling. The engine still honours an explicit value.
+    func testDefaultQualityIsMaximum() {
+        XCTAssertEqual(ConversionOptions.maximumQuality, 1.0)
+        XCTAssertEqual(ConversionOptions().quality, 1.0)
+        XCTAssertEqual(ConversionOptions(quality: 0.5).quality, 0.5)
+    }
+
     @MainActor
     func testBadExtensionThrowsUnsupportedFile() async throws {
         let url = URL(fileURLWithPath: "/tmp/sample.exe")

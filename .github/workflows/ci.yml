@@ -35,6 +35,16 @@ jobs:
       - name: Build
         run: swift build
 
+      - name: Build the app target
+        # The app lives in a hand-maintained pbxproj that references library
+        # files by hand, so this is what catches a file being renamed or added
+        # without being registered. Signing is off because CI only needs the
+        # compile, not a launchable bundle.
+        run: |
+          xcodebuild -project App/ProSlide.xcodeproj -scheme ProSlide \
+            -configuration Debug -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO build
+
       - name: Test
         env:
           FILE_CONVERTER_ARTIFACTS: ${{ runner.temp }}/test-artifacts

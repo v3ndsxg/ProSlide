@@ -10,6 +10,7 @@ public struct ConversionEngine {
     public func convert(
         input: URL,
         options: ConversionOptions,
+        profileDirectory: URL? = nil,
         progress: @escaping @Sendable (Double) async -> Void
     ) async throws -> URL {
         let extensionName = input.pathExtension.lowercased()
@@ -25,7 +26,12 @@ public struct ConversionEngine {
         let pdfURL: URL
         if extensionName == "pptx" {
             await progress(0.05)
-            pdfURL = try await makePDF(from: input, options: options, temporaryDirectory: temporaryDirectory)
+            pdfURL = try await makePDF(
+                from: input,
+                options: options,
+                temporaryDirectory: temporaryDirectory,
+                profileDirectory: profileDirectory
+            )
         } else {
             pdfURL = input
         }
@@ -51,18 +57,34 @@ public struct ConversionEngine {
         return outputDirectory
     }
 
-    private func makePDF(from source: URL, options: ConversionOptions, temporaryDirectory: URL) async throws -> URL {
+    /// - Parameter profileDirectory: an existing LibreOffice user profile to
+    ///   reuse. Callers converting several PowerPoint files in a row can pass
+    ///   one profile for the whole batch instead of paying profile creation on
+    ///   every file. Passing nil creates a throwaway profile for this call, so
+    ///   single conversions stay fully isolated.
+    private func makePDF(
+        from source: URL,
+        options: ConversionOptions,
+        temporaryDirectory: URL,
+        profileDirectory: URL?
+    ) async throws -> URL {
         let executable = try libreOfficeExecutable()
         let process = Process()
         let errorPipe = Pipe()
         process.executableURL = executable
         let fontEmbedding = options.fontEmbed ? "true" : "false"
         let convertTo = "pdf:writer_pdf_Export:{\"EmbedFonts\":{\"type\":\"boolean\",\"value\":\"\(fontEmbedding)\"}}"
-        let profileDirectory = temporaryDirectory.appendingPathComponent("LibreOffice-Profile", isDirectory: true)
-        try FileManager.default.createDirectory(at: profileDirectory, withIntermediateDirectories: true)
+        let profile: URL
+        if let profileDirectory {
+            profile = profileDirectory
+        } else {
+            let created = temporaryDirectory.appendingPathComponent("LibreOffice-Profile", isDirectory: true)
+            try FileManager.default.createDirectory(at: created, withIntermediateDirectories: true)
+            profile = created
+        }
         process.arguments = [
             "--headless",
-            "-env:UserInstallation=\(profileDirectory.absoluteString)",
+            "-env:UserInstallation=\(profile.absoluteString)",
             "--convert-to", convertTo,
             "--outdir", temporaryDirectory.path,
             source.path

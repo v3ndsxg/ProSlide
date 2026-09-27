@@ -9,17 +9,17 @@
 /* Begin PBXBuildFile section */
 		1A0000000000000000000030 /* ProSlideApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000040 /* ProSlideApp.swift */; };
 		1A0000000000000000000031 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000041 /* ContentView.swift */; };
-		1A0000000000000000000032 /* ConversionJob.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000042 /* ConversionJob.swift */; };
 		1A0000000000000000000033 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000043 /* Assets.xcassets */; };
 		1A0000000000000000000034 /* FileConverterCore in Frameworks */ = {isa = PBXBuildFile; productRef = 1A0000000000000000000021 /* FileConverterCore */; };
+		1A0000000000000000000035 /* BinOpener.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000044 /* BinOpener.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		1A0000000000000000000011 /* ProSlide.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ProSlide.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000000000000000000040 /* ProSlideApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProSlideApp.swift; sourceTree = "<group>"; };
 		1A0000000000000000000041 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		1A0000000000000000000042 /* ConversionJob.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversionJob.swift; sourceTree = "<group>"; };
 		1A0000000000000000000043 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		1A0000000000000000000044 /* BinOpener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinOpener.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -56,7 +56,7 @@
 			children = (
 				1A0000000000000000000040 /* ProSlideApp.swift */,
 				1A0000000000000000000041 /* ContentView.swift */,
-				1A0000000000000000000042 /* ConversionJob.swift */,
+				1A0000000000000000000044 /* BinOpener.swift */,
 				1A0000000000000000000043 /* Assets.xcassets */,
 			);
 			path = ProSlide;
@@ -146,7 +146,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A0000000000000000000031 /* ContentView.swift in Sources */,
-				1A0000000000000000000032 /* ConversionJob.swift in Sources */,
+				1A0000000000000000000035 /* BinOpener.swift in Sources */,
 				1A0000000000000000000030 /* ProSlideApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

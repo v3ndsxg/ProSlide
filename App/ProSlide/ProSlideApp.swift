@@ -18,12 +18,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct ProSlideApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var job = ConversionJob()
+    @StateObject private var queue = ConversionQueue()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(job)
+                .environmentObject(queue)
                 .frame(minWidth: 1180, minHeight: 640)
         }
         .windowStyle(.titleBar)

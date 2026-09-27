@@ -26,27 +26,62 @@ public enum BinStorage {
 }
 
 public struct ConversionOptions: Sendable {
+    /// ImageIO's ceiling for lossy JPEG. The app always renders at this value,
+    /// so there is no quality control in the UI. Note this is still 4:2:0
+    /// subsampled, which is "max quality" rather than lossless.
+    public static let maximumQuality: Double = 1.0
+
     public var quality: Double
     public var resolution: ResolutionPreset
     public var destination: URL
     public var fontEmbed: Bool
 
-    public init() {
-        quality = 0.92
-        resolution = .fullHD
-        destination = BinStorage.rootURL
-        fontEmbed = true
+    public init(
+        quality: Double = ConversionOptions.maximumQuality,
+        resolution: ResolutionPreset = .fullHD,
+        destination: URL = BinStorage.rootURL,
+        fontEmbed: Bool = true
+    ) {
+        self.quality = quality
+        self.resolution = resolution
+        self.destination = destination
+        self.fontEmbed = fontEmbed
     }
 }
 
-public struct ConversionGroup: Identifiable, Equatable {
+public struct ConversionQueueItem: Identifiable, Equatable, Sendable {
+    public enum Status: Equatable, Sendable {
+        case pending
+        case converting
+        case succeeded(folder: URL)
+        case failed(String)
+    }
+
     public let id: UUID
+    public let url: URL
+    public var status: Status
+
+    public init(id: UUID = UUID(), url: URL, status: Status = .pending) {
+        self.id = id
+        self.url = url
+        self.status = status
+    }
+
+    public var fileName: String { url.lastPathComponent }
+}
+
+/// A document ProSlide has already converted, shown in the bin.
+public struct ConversionGroup: Identifiable, Equatable, Sendable {
+    /// The folder path, not a fresh UUID: the bin is rescanned after every
+    /// conversion, and a random identifier would silently drop the user's
+    /// selection each time it refreshed.
+    public var id: String { folderURL.path }
+
     public let sourceName: String
     public let folderURL: URL
     public let imageURLs: [URL]
 
     public init(sourceName: String, folderURL: URL) {
-        self.id = UUID()
         self.sourceName = sourceName
         self.folderURL = folderURL
         self.imageURLs = ConversionGroup.exportedImages(in: folderURL)
