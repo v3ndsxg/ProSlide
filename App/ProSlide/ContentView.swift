@@ -272,7 +272,7 @@ struct ContentView: View {
                 .background(Color.accentColor)
                 .foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
-                .onDrag { NSItemProvider(contentsOf: urls) ?? NSItemProvider(object: urls[0] as NSURL) }
+                .onDrag { MultiFileDrag.itemProvider(for: urls) }
         }
     }
 

@@ -1,4 +1,5 @@
 import AppKit
+import FileConverterCore
 import SwiftUI
 
 /// ProSlide ships as a real .app bundle, so AppKit already gives it a regular
