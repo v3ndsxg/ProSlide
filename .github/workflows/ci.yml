@@ -32,18 +32,27 @@ jobs:
         # If the cask install fails, the PPTX test skips itself and the
         # PDF-only suite still runs, so the job stays green.
 
-      - name: Build
-        run: swift build
-
-      - name: Build the app target
-        # The app lives in a hand-maintained pbxproj that references library
-        # files by hand, so this is what catches a file being renamed or added
-        # without being registered. Signing is off because CI only needs the
-        # compile, not a launchable bundle.
+      - name: Build and package the app
+        # This is the same path a user takes to install ProSlide, so it also
+        # catches a file under App/ProSlide being added or renamed without
+        # being registered in the ProSlideApp target in Package.swift.
+        #
+        # App/ProSlide.xcodeproj is development-only (breakpoints and previews)
+        # and is no longer built here; a hand-maintained pbxproj is exactly the
+        # kind of file that breaks silently.
         run: |
-          xcodebuild -project App/ProSlide.xcodeproj -scheme ProSlide \
-            -configuration Debug -destination 'platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO build
+          ./Scripts/make-app-bundle.sh release
+          APP=build/ProSlide.app
+          test -x "$APP/Contents/MacOS/ProSlide" || { echo "missing executable"; exit 1; }
+          plutil -lint "$APP/Contents/Info.plist"
+          test -f "$APP/Contents/Resources/ProSlide.icns" || { echo "missing icon"; exit 1; }
+          plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist"; }
+          test "$(plist CFBundlePackageType)" = APPL || { echo "not an app bundle"; exit 1; }
+          test "$(plist CFBundleExecutable)" = ProSlide || { echo "wrong executable name"; exit 1; }
+          test "$(plist CFBundleIdentifier)" = com.v3ndsxg.proslide || { echo "wrong bundle id"; exit 1; }
+          codesign --verify "$APP"
+          codesign -dv "$APP" 2>&1 | sed -n '1,4p'
+          du -sh "$APP"
 
       - name: Test
         env:

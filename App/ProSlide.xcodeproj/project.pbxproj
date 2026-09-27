@@ -38,7 +38,6 @@
 			isa = PBXGroup;
 			children = (
 				1A0000000000000000000004 /* ProSlide */,
-				1A0000000000000000000005 /* Packages */,
 				1A0000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -60,14 +59,6 @@
 				1A0000000000000000000043 /* Assets.xcassets */,
 			);
 			path = ProSlide;
-			sourceTree = "<group>";
-		};
-		1A0000000000000000000005 /* Packages */ = {
-			isa = PBXGroup;
-			children = (
-				1A0000000000000000000020 /* XCLocalSwiftPackageReference ".." */,
-			);
-			name = Packages;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

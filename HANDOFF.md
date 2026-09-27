@@ -1,6 +1,6 @@
 # Session Handoff
 
-Written at the end of the "production features" pass. Read this first in a new
+Updated at the end of the app-packaging pass. Read this first in a new
 session; it records what was done, what is still broken, and what has *never*
 been verified.
 
@@ -8,15 +8,20 @@ been verified.
 
 ## TL;DR
 
-Two things are true right now:
-
-1. **Nothing in the latest pass has ever been compiled.** The work was done on
-   Linux with no Swift toolchain and no Xcode. Every check was static
-   (grep/brace-balance/pbxproj ID consistency). Expect compile errors on first
-   build.
-2. **The app has never shown a window.** ⌘R ("Start the active scheme") does
-   nothing visible. This is unresolved and was explicitly deferred by the user
-   until the feature work was finished. It is now the top open issue.
+1. **The app builds and runs.** `ConversionQueue` and `ConversionEngine` had two
+   real compile errors; both are fixed. The user confirmed a successful build
+   (commits `70612f7`, `81af9c5`).
+2. **The "no window on ⌘R" mystery is solved, and it was never a runtime
+   bug.** Xcode could not *parse* `project.pbxproj` at all, so no scheme ever
+   loaded and there was nothing to run. Root cause and fix are in "Open issues
+   → 1" below.
+3. **The app no longer depends on the Xcode project.** `Package.swift` now has
+   an executable target and `Scripts/make-app-bundle.sh` assembles
+   `ProSlide.app` from `swift build`. That is the install path in the README
+   and the path CI builds. The pbxproj is now development-only.
+4. **The launch itself is still unverified.** Work happens on Linux with no
+   Swift toolchain, so the packaged bundle has never been run. That is the one
+   thing a new session should do first.
 
 ---
 
@@ -35,12 +40,12 @@ The user's machine is the only place anything can actually be verified.
 
 ## Git state
 
-- `72b1d88` — "Getting ready to fully build the application for production use"
-  (the Xcode app packaging pass) — **committed**.
-- The current pass (batch queue + bin drag/drop) is **staged but NOT
-  committed**. Start a new session with `git status`; the work is all in the
-  index, ready to commit or amend as the user prefers.
-- Do not commit unless asked.
+- `9d9236c` "Adding new features and cleanup" — the batch queue + bin drag/drop
+  pass. Committed; the old "staged but not committed" note below is obsolete.
+- `70612f7`, `81af9c5` "Fixed a failed build" — the two compile fixes.
+- The pbxproj fix and the packaging pass are **uncommitted**. Start with
+  `git status`.
+- The user commits; do not commit unless asked.
 
 ---
 
@@ -59,14 +64,16 @@ terminal required.
   - `GENERATE_INFOPLIST_FILE = YES`, so there is no Info.plist in the repo.
 - UI moved out of the package into the app target: `ProSlideApp.swift`,
   `ContentView.swift`, plus a generated 1024×1024 placeholder icon.
-- `Package.swift` reduced to a library-only package (`FileConverterCore`) plus
-  the test target. It no longer produces an executable, so there is no
-  duplicate `@main` and no duplicate copy of the rendering code.
-- `Scripts/make-app-bundle.sh` wraps `xcodebuild` and copies the product to
-  `build/ProSlide.app`.
+- `Package.swift` was reduced to a library-only package (`FileConverterCore`)
+  plus the test target, so there was no duplicate `@main` and no duplicate copy
+  of the rendering code. **Superseded:** it again has an executable target, but
+  as a separate target rather than a second `@main` in the library.
+- `Scripts/make-app-bundle.sh` originally wrapped `xcodebuild` and copied the
+  product to `build/ProSlide.app`. **Superseded** — it no longer touches Xcode.
 - `.gitignore` for `.build/`, `build/`, `DerivedData/`, `Package.resolved`,
   and Xcode per-user state.
-- README rewritten to lead with the Xcode workflow.
+- README rewritten to lead with the Xcode workflow. **Superseded** — it now
+  leads with the one-command install.
 
 AppKit specifics that were needed to make a window actually appear:
 - `@NSApplicationDelegateAdaptor` with `setActivationPolicy(.regular)` in
@@ -152,37 +159,100 @@ fixed. Listed because they explain *why* the code looks the way it does.
 
 ---
 
+## What was built (pass 3 — packaging)
+
+Goal: a real, double-clickable, installable `ProSlide.app` that does not depend
+on `App/ProSlide.xcodeproj`, because that project had never once been opened by
+Xcode and was the sole reason ⌘R did nothing.
+
+### Two compile errors, both real
+
+1. **`Sources/FileConverterCore/ConversionQueue.swift`** — a stored property
+   named `convert` shadowed the `convert()` method on the same type, so the
+   body could not call it ("invalid redeclaration"). Renamed the property to
+   `convertOne`; the public `convert()` API and all call sites are unchanged.
+2. **`Sources/FileConverterCore/ConversionEngine.swift`** — the `progress`
+   parameter of `ConversionEngine.convert` was marked `@escaping` while being
+   used synchronously. Removed the attribute; the callback is only invoked
+   while the function is on the stack.
+
+### The ⌘R root cause (see Open issues 1 for the full story)
+
+`project.pbxproj` listed the `XCLocalSwiftPackageReference` as a child of a
+`PBXGroup` called `Packages`. `XCLocalSwiftPackageReference` is not a
+groupable type, so Xcode called `group` on it, got
+`unrecognized selector`, and declared the project damaged. Real Xcode projects
+reference local packages **only** through `PBXProject.packageReferences`. The
+`Packages` group and its entry in the main group's `children` were deleted;
+everything else about the package reference was already correct.
+
+### Packaging without Xcode
+
+- `Package.swift` gained product `.executable(name: "ProSlide", targets:
+  ["ProSlideApp"])` and target `ProSlideApp` at `path: "App/ProSlide"`,
+  depending on `FileConverterCore`, with `Assets.xcassets` excluded (nothing
+  looks up `AccentColor` or `AppIcon` by name, and the system accent is used
+  instead). The app sources are compiled as a real executable, so
+  `ProSlideApp.swift`'s `@main` is the only entry point.
+- `Scripts/make-app-bundle.sh` rewritten: `swift build -c release`, then it
+  assembles `build/ProSlide.app` itself — executable, a generated `.icns` (via
+  `sips` + `iconutil` from the existing 1024px PNG), a ~15-line `Info.plist`
+  mirroring the Xcode build settings, and an ad-hoc `codesign`. Supports
+  `debug`/`release` and `--install` (copies to `/Applications` via `ditto`), and
+  **rejects unknown arguments** instead of ignoring them, which is what
+  silently swallowed a pasted `open build/ProSlide.app` earlier.
+- `.github/workflows/ci.yml`: the `xcodebuild` app step is gone. CI now runs the
+  packaging script and asserts the bundle layout, plist values, and signature —
+  so CI tests the same path the README tells users to run. The pbxproj is no
+  longer built in CI.
+- `README.md` rewritten around the one-command install.
+
+---
+
 ## Open issues
 
-### 1. The app never shows a window (highest priority, unresolved)
-⌘R / "Start the active scheme" produces no window and no error output. Not
-diagnosed — the user deferred it. Earlier in the project a claim that Finder
-launch also did nothing was **retracted**, so do not assume that.
+### 1. The app never showed a window — root cause found, fix unverified
 
-Things already ruled in, so do not re-try them blindly:
-- The pbxproj is structurally valid and the sources phase matches disk.
-- The scheme is shared and parses as valid XML.
-- Assets and Info.plist generation are in place.
+**The cause was never a runtime bug.** Xcode refused to *parse* the project, so
+there was no scheme and nothing to run:
 
-Likely next steps to investigate (not yet tried):
-- `xcodebuild -project App/ProSlide.xcodeproj -scheme ProSlide -configuration
-  Debug -destination 'platform=macOS' build` — does a clean CLI build succeed?
-  This separates "does not compile" from "does not display".
-- Run the built binary directly from Terminal: `./ProSlide.app/Contents/MacOS/
-  ProSlide`, to see stderr/stdout and any crash.
-- Check whether the process is even staying alive: `pgrep -lf ProSlide` right
-  after ⌘R.
-- `Console.app` / `log stream --predicate 'process == "ProSlide"'` while running.
-- Confirm the local SPM dependency actually resolved for the app target
-  (`FileConverterCore` in Frameworks is a `productRef`); an unresolved package
-  can fail the build quietly in the GUI.
-- Try `xcodebuild ... build && open` on the product, bypassing the GUI scheme
-  entirely.
+```
+-[XCLocalSwiftPackageReference group]: unrecognized selector sent to instance
+xcodebuild: error: Unable to read project 'ProSlide.xcodeproj' … Reason: The
+project 'ProSlide' is damaged and cannot be opened.
+```
 
-### 2. Nothing compiles yet
-All pass-2 code is unverified. Highest-risk spots, in order:
-- `ConversionQueueTests.swift` — the most new, most intricate code. The `Gate`
-  and `Recorder` helpers use `CheckedContinuation`; check for sendability and
+Evidence that this was the whole story: the exception prints the receiver's real
+class (`XCLocalSwiftPackageReference`), so the `isa` string resolved fine and
+`objectVersion = 56` was not at fault. Xcode only asks for `group` on an object
+that is listed as a `PBXGroup` child, and the project did exactly that. A real
+Xcode 15 project with local packages
+(`tuist/XcodeProj` fixture `ProjectWithXCLocalSwiftPackageReferences`) was
+checked for comparison: its main group contains only source groups, Products and
+Frameworks — there is no "Packages" group anywhere.
+
+The `Packages` `PBXGroup` and its `children` entry were removed. Static checks:
+no dangling 24-hex IDs, no orphans, braces/parens balanced. **Not yet confirmed
+by Xcode.** It also no longer matters for packaging, since the app is built by
+SwiftPM now.
+
+Ruled in, so do not re-try: the scheme is shared and valid XML, assets and
+Info.plist generation were in place, the sources phase matched disk.
+
+### 2. The packaged app has never been launched
+Everything is still verified statically. First thing to do on macOS:
+```sh
+./Scripts/make-app-bundle.sh --install
+open /Applications/ProSlide.app
+```
+If no window appears, run the binary directly to get stderr:
+```sh
+/Applications/ProSlide.app/Contents/MacOS/ProSlide
+```
+
+Remaining riskiest code, in order:
+- `ConversionQueueTests.swift` — the most intricate new code. The `Gate` and
+  `Recorder` helpers use `CheckedContinuation`; check for sendability and
   double-resume mistakes.
 - The `public convenience init` delegating to an internal designated
   `init(options:convert:)`.
@@ -192,18 +262,18 @@ All pass-2 code is unverified. Highest-risk spots, in order:
   but correct for a macOS 13 deployment target. Expect a warning, not an error.
   Do not "fix" it to the zero-parameter form; that requires macOS 14.
 
-### 3. `ConversionOptions.quality` is still caller-settable
+### 4. `ConversionOptions.quality` is still caller-settable
 The slider is gone from the UI, but the field remains, and
 `ConversionOptions(quality: 0.5)` is honoured and deliberately tested. Making
 the engine literally unable to render below maximum means deleting the field
 and the `kCGImageDestinationLossyCompressionQuality` call in
 `ConversionEngine.render`. Flagged to the user, not yet requested.
 
-### 4. `save(group:to:)` flattens
+### 5. `save(group:to:)` flattens
 Saving a document's images to a chosen folder copies the JPEGs loose, without a
 per-document subfolder. Pre-existing behaviour, carried over unchanged.
 
-### 5. Minor / unpolished
+### 6. Minor / unpolished
 - Selecting multiple documents then clicking **Save…** acts on one document at a
   time; there is no combined save.
 - The bin panel only appears when the bin is non-empty, so there is no empty
@@ -217,23 +287,24 @@ per-document subfolder. Pre-existing behaviour, carried over unchanged.
 
 ## Verification commands
 
-On macOS, in this order. Expect the first two to surface compile errors.
+On macOS, in this order. The first is the whole story for a normal user.
 
 ```sh
 swift build && swift test
 
-xcodebuild -project App/ProSlide.xcodeproj -scheme ProSlide \
-  -configuration Debug -destination 'platform=macOS' build
+# the install path: build, package, sign, copy to /Applications
+./Scripts/make-app-bundle.sh --install
+open /Applications/ProSlide.app
 
-# standalone bundle, no Xcode GUI
-./Scripts/make-app-bundle.sh
-open build/ProSlide.app
+# optional, development only — ⌘R should work now that the pbxproj parses
+open App/ProSlide.xcodeproj
 ```
 
 The PPTX tests self-skip when LibreOffice is not installed, so the PDF-only
 suite is always meaningful. CI (`.github/workflows/ci.yml`) pins
-`Xcode_16.4.app`, installs LibreOffice with `continue-on-error`, and runs
-`swift build`, the app-target build, and `swift test`.
+`Xcode_16.4.app`, installs LibreOffice with `continue-on-error`, runs
+`./Scripts/make-app-bundle.sh release` plus bundle-layout assertions, and then
+`swift test`.
 
 Useful when a UI assertion misbehaves:
 ```sh
@@ -244,11 +315,21 @@ FILE_CONVERTER_ARTIFACTS=/tmp/proslide-artifacts swift test
 
 ## Things to be careful about next session
 
-- **Do not commit** without being asked. The pass-2 work is staged only.
+- **Do not commit** without being asked.
 - Actions in CI are pinned to commit SHAs, not tags. Keep that hygiene.
+- **The app's file list now lives in two places**: the `ProSlideApp` target in
+  `Package.swift` (what the packaging script and CI build) and the pbxproj
+  (what ⌘R builds). A file added to `App/ProSlide/` and registered only in the
+  pbxproj will compile in Xcode and be missing from the installed app. Add it to
+  both.
+- The pbxproj is **no longer built by CI**, so it can drift. If ⌘R starts
+  misbehaving, check it before suspecting the app.
 - The app is intentionally **unsandboxed** and ad-hoc signed. Do not "fix" the
   signing or add the sandbox without asking; `Process`-launched LibreOffice
   requires it.
+- The hand-written `Info.plist` in the packaging script must stay in sync with
+  the pbxproj's `PRODUCT_BUNDLE_IDENTIFIER`, version, and deployment target. CI
+  asserts the bundle id and package type, so drift there fails the build.
 - `SWIFT_VERSION = 5.0`, not 6. Do not enable strict concurrency to silence a
   warning; it is a deliberate choice.
 - `BinStorage.rootURL` is `~/Library/Application Support/FileConverter/Bin` and
