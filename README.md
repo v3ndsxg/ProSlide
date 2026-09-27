@@ -7,7 +7,14 @@ A MacOS utility that can convert PowerPoint/PDF files to JPEGs. This can then be
 - LibreOffice installed in `/Applications` for `.pptx` conversion. PDF conversion works without it.
 
 ## Run
-Open `Package.swift` in Xcode and run the `FileConverter` scheme. The project is also a Swift Package, so it can be built with `swift build` on macOS.
+Open `Package.swift` in Xcode and run the `FileConverter` scheme (pick it from the scheme dropdown, since the test target has its own scheme). The project is also a Swift Package, so it can be built with `swift build` and launched with `swift run FileConverter` on macOS.
+
+If no window appears when running the bare executable, build a real app bundle instead:
+
+```
+./Scripts/make-app-bundle.sh          # writes build/ProSlide.app
+open build/ProSlide.app
+```
 
 ## Tests
 `swift test` runs the conversion pipeline against 16:9 sample PDF/PPTX fixtures at every resolution preset (HD 1280x720, Full HD 1920x1080, 4K 3840x2160), asserting output size and that the render stays upright. The PPTX path is skipped when LibreOffice is not installed. CI runs this suite on a macOS runner on every push.
