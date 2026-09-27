@@ -1,0 +1,15 @@
+# Swift Package Manager
+.build/
+Package.resolved
+
+# Xcode build output and the generated .app bundle
+build/
+DerivedData/
+
+# Xcode per-user state (must stay out of version control)
+*.xcuserdatad/
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.moved-aside
+
+.DS_Store

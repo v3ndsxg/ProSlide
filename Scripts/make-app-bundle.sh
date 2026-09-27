@@ -1,54 +1,35 @@
 #!/bin/bash
-# Wraps the SwiftPM executable in a real .app bundle so macOS treats it as a
-# regular app: dock icon, menu bar, activation, and relaunching from Finder.
-# Use this when running the bare target does not put a window on screen.
+# Builds ProSlide.app from the Xcode project and copies it somewhere you can
+# double-click. Use this when you want a standalone app without opening Xcode;
+# the product is byte-for-byte what Xcode's Cmd-B produces.
 set -euo pipefail
 
-CONFIG="${1:-release}"
+CONFIG="${1:-Release}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="ProSlide"
-DEST="$ROOT/build/$APP_NAME.app"
+PROJECT="$ROOT/App/ProSlide.xcodeproj"
+SCHEME="ProSlide"
+DERIVED="$ROOT/build/DerivedData"
+APP="$ROOT/build/ProSlide.app"
 
-cd "$ROOT"
-swift build -c "$CONFIG" --product FileConverter
+[ -d "$PROJECT" ] || { echo "error: $PROJECT not found"; exit 1; }
 
-BINARY="$(swift build -c "$CONFIG" --product FileConverter --show-bin-path)/FileConverter"
-[ -x "$BINARY" ] || { echo "error: no executable at $BINARY"; exit 1; }
+echo "Building $SCHEME ($CONFIG)…"
+xcodebuild \
+    -project "$PROJECT" \
+    -scheme "$SCHEME" \
+    -configuration "$CONFIG" \
+    -destination "platform=macOS" \
+    -derivedDataPath "$DERIVED" \
+    build
 
-rm -rf "$DEST"
-mkdir -p "$DEST/Contents/MacOS" "$DEST/Contents/Resources"
-cp "$BINARY" "$DEST/Contents/MacOS/$APP_NAME"
+BUILT="$DERIVED/Build/Products/$CONFIG/ProSlide.app"
+[ -d "$BUILT" ] || { echo "error: expected $BUILT"; exit 1; }
 
-cat > "$DEST/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleExecutable</key>
-    <string>$APP_NAME</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.v3ndsxg.proslide</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-</dict>
-</plist>
-PLIST
+rm -rf "$APP"
+mkdir -p "$(dirname "$APP")"
+cp -R "$BUILT" "$APP"
 
-codesign --force --sign - "$DEST" >/dev/null 2>&1 || echo "note: ad-hoc signing unavailable; the app still runs locally"
-
-echo "Built $DEST"
-echo "Run it with:  open '$DEST'"
+echo
+echo "Built $APP"
+echo "Launch it with:  open '$APP'"
+echo "Install it with: cp -R '$APP' /Applications/"

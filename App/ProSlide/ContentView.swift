@@ -45,7 +45,7 @@ struct ContentView: View {
 
     private var mainPane: some View {
         VStack(spacing: 18) {
-            Text("File Converter").font(.largeTitle.weight(.semibold))
+            Text("ProSlide").font(.largeTitle.weight(.semibold))
             Text("Turn PDFs and PowerPoint slides into dependable JPEG images.")
                 .foregroundStyle(.secondary)
 

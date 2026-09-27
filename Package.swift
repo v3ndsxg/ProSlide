@@ -1,19 +1,17 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
+// The macOS app lives in App/ProSlide.xcodeproj and depends on the
+// FileConverterCore library below. This package owns the conversion engine and
+// its tests, so `swift test` covers rendering without needing Xcode.
 let package = Package(
-    name: "FileConverter",
+    name: "ProSlideCore",
     platforms: [.macOS(.v13)],
     products: [
-        .library(name: "FileConverterCore", targets: ["FileConverterCore"]),
-        .executable(name: "FileConverter", targets: ["FileConverter"])
+        .library(name: "FileConverterCore", targets: ["FileConverterCore"])
     ],
     targets: [
         .target(name: "FileConverterCore"),
-        .executableTarget(
-            name: "FileConverter",
-            dependencies: ["FileConverterCore"]
-        ),
         .testTarget(
             name: "FileConverterTests",
             dependencies: ["FileConverterCore"],

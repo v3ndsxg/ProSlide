@@ -6,15 +6,24 @@ A MacOS utility that can convert PowerPoint/PDF files to JPEGs. This can then be
 - Xcode 15 or later (for development)
 - LibreOffice installed in `/Applications` for `.pptx` conversion. PDF conversion works without it.
 
+## Layout
+- `App/ProSlide.xcodeproj` — the macOS app. Open this in Xcode.
+- `App/ProSlide/` — the SwiftUI app target (`ProSlideApp.swift`, `ContentView.swift`, `ConversionJob.swift`) and its asset catalog.
+- `Sources/FileConverterCore/` — the conversion engine, a Swift package library.
+- `Tests/FileConverterTests/` — engine tests. The app target has no tests; the engine is what has logic worth asserting.
+
+The app links the engine as a local Swift package, so there is one copy of the rendering code and no duplicate `@main`.
+
 ## Run
-Open `Package.swift` in Xcode and run the `FileConverter` scheme (pick it from the scheme dropdown, since the test target has its own scheme). The project is also a Swift Package, so it can be built with `swift build` and launched with `swift run FileConverter` on macOS.
+Open `App/ProSlide.xcodeproj` and press Run (⌘R). ⌘B writes `ProSlide.app` into DerivedData, which you can double-click in Finder or copy to `/Applications`.
 
-If no window appears when running the bare executable, build a real app bundle instead:
-
+To build the same app without opening Xcode:
 ```
-./Scripts/make-app-bundle.sh          # writes build/ProSlide.app
+./Scripts/make-app-bundle.sh          # writes build/ProSlide.app (Debug or Release)
 open build/ProSlide.app
 ```
+
+The package itself no longer produces an executable: `swift build` and `swift test` build and test the engine library only, which is all the test suite and CI need.
 
 ## Tests
 `swift test` runs the conversion pipeline against 16:9 sample PDF/PPTX fixtures at every resolution preset (HD 1280x720, Full HD 1920x1080, 4K 3840x2160), asserting output size and that the render stays upright. The PPTX path is skipped when LibreOffice is not installed. CI runs this suite on a macOS runner on every push.
@@ -22,7 +31,7 @@ open build/ProSlide.app
 ## Conversion behavior
 - PDF: PDFKit/Core Graphics renders each page directly to JPEG.
 - PPTX: the app runs LibreOffice headlessly to make a temporary PDF, then renders that PDF to JPEG.
-- Every job creates a new `Document Name JPEGs` folder in the selected export location (Downloads by default), avoiding accidental overwrites.
+- Every job creates a new `Document Name JPEGs` folder in the persistent bin (`~/Library/Application Support/FileConverter/Bin`), never overwriting an earlier conversion. The bin panel's **Save…** copies a set anywhere you like.
 
 LibreOffice fidelity depends on installed fonts and PowerPoint-specific effects. For the closest possible Microsoft Office rendering, a future version can add PowerPoint automation as an optional renderer.
 
