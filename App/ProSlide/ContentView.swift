@@ -10,7 +10,6 @@ struct ContentView: View {
     @State private var saveTarget: ConversionGroup?
     @State private var confirmingClear = false
     @State private var isTargeted = false
-    @State private var selectedGroups: Set<String> = []
 
     var body: some View {
         HStack(spacing: 0) {
@@ -197,13 +196,11 @@ struct ContentView: View {
             HStack {
                 Label("Bin", systemImage: "photo.stack").font(.headline)
                 Spacer()
-                selectAllButton
                 Button("Open Folder") { BinOpener.open(queue.binRootURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
             }
-            Text("Drag a document's JPEGs into ProPresenter, or drag its folder to import the set as a sequence.")
+            Text("Drag a document's Drag All Images handle into ProPresenter to bring in every slide at once. Drag a thumbnail to move just that one image.")
                 .font(.caption).foregroundStyle(.secondary)
-            selectionDragBar
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(queue.groups) { group in
@@ -217,63 +214,29 @@ struct ContentView: View {
         .frame(width: 460)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color.secondary.opacity(0.06))
-        .onChange(of: queue.groups) { _ in pruneSelection() }
     }
 
-    private var allSelected: Bool {
-        !queue.groups.isEmpty && selectedGroups.count == queue.groups.count
-    }
-
-    /// Drops selection that no longer exists, e.g. after the bin is cleared.
-    private func pruneSelection() {
-        selectedGroups.formIntersection(Set(queue.groups.map(\.id)))
-    }
-
-    private var selectAllButton: some View {
-        Button(allSelected ? "Deselect All" : "Select All") {
-            selectedGroups = allSelected ? [] : Set(queue.groups.map(\.id))
+    /// The bin's one multi-image drag control: it drops a document's whole
+    /// JPEGs folder, which ProPresenter imports as a sequence.
+    ///
+    /// This deliberately drags the folder rather than the individual images. A
+    /// SwiftUI drag can only ever hand over a single `NSItemProvider`, so
+    /// packing many URLs into one item does not arrive as many files — a
+    /// receiver takes the first. Finder gets this right by writing one
+    /// pasteboard item per file, which needs an AppKit drag session. Dropping
+    /// the folder sidesteps that entirely and is what ProPresenter wants.
+    private func dragHandle(folder: URL) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "folder.fill")
+            Text("Drag All Images")
         }
-        .disabled(queue.groups.isEmpty)
-    }
-
-    private var selectedGroupsInOrder: [ConversionGroup] {
-        queue.groups.filter { selectedGroups.contains($0.id) }
-    }
-
-    private var selectedImageURLs: [URL] {
-        selectedGroupsInOrder.flatMap(\.imageURLs)
-    }
-
-    @ViewBuilder
-    private var selectionDragBar: some View {
-        if !selectedImageURLs.isEmpty {
-            HStack {
-                Text("\(selectedImageURLs.count) images in \(selectedGroupsInOrder.count) document\(selectedGroupsInOrder.count == 1 ? "" : "s")")
-                    .font(.caption)
-                Spacer()
-                dragHandle(title: "Drag All Images", urls: selectedImageURLs)
-                dragHandle(title: "Drag Folders", urls: selectedGroupsInOrder.map(\.folderURL))
-            }
-            .padding(8)
-            .background(Color.accentColor.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
-    }
-
-    @ViewBuilder
-    private func dragHandle(title: String, urls: [URL]) -> some View {
-        if urls.isEmpty {
-            EmptyView()
-        } else {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.accentColor)
-                .foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .onDrag { MultiFileDrag.itemProvider(for: urls) }
-        }
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.accentColor)
+        .foregroundStyle(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onDrag { NSItemProvider(contentsOf: folder) ?? NSItemProvider(object: folder as NSURL) }
     }
 
     private func binGroup(_ group: ConversionGroup) -> some View {
@@ -285,10 +248,7 @@ struct ContentView: View {
                 Button("Open") { BinOpener.open(group.folderURL) }
                 Button("Save…") { saveTarget = group; showingSaveImporter = true }
             }
-            HStack(spacing: 8) {
-                dragHandle(title: "Drag All Images", urls: group.imageURLs)
-                dragHandle(title: "Drag Folder", urls: [group.folderURL])
-            }
+            dragHandle(folder: group.folderURL)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
                 ForEach(group.imageURLs, id: \.self) { imageURL in
                     VStack(spacing: 4) {
@@ -307,20 +267,8 @@ struct ContentView: View {
             }
         }
         .padding(10)
-        .background(selectedGroups.contains(group.id)
-                    ? Color.accentColor.opacity(0.18)
-                    : Color.green.opacity(0.1))
+        .background(Color.green.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onTapGesture { toggleSelection(of: group) }
-    }
-
-    private func toggleSelection(of group: ConversionGroup) {
-        if selectedGroups.contains(group.id) {
-            selectedGroups.remove(group.id)
-        } else {
-            selectedGroups.insert(group.id)
-        }
     }
 
     // MARK: - Drop

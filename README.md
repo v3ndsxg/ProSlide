@@ -10,7 +10,7 @@ A macOS app that converts PDF and PowerPoint files into dependable JPEG images, 
 - `App/ProSlide/` — the app: `ProSlideApp.swift`, `ContentView.swift`, `BinOpener.swift` and its asset catalog.
 - `App/ProSlide.xcodeproj` — development only. Not needed to build, run, or install the app.
 - `Package.swift` — builds both the engine library and the app executable.
-- `Sources/FileConverterCore/` — the Swift package library: the conversion engine, the batch queue, and the multi-file drag payload.
+- `Sources/FileConverterCore/` — the Swift package library: the conversion engine and the batch queue.
 - `Tests/FileConverterTests/` — engine and batch tests.
 - `Scripts/make-app-bundle.sh` — assembles `ProSlide.app` from `swift build`.
 
@@ -33,7 +33,7 @@ xattr -dr com.apple.quarantine /Applications/ProSlide.app
 ## Develop in Xcode
 Open `App/ProSlide.xcodeproj` for breakpoints and SwiftUI previews. When you add or rename a file under `App/ProSlide/`, add it to the `ProSlideApp` target in `Package.swift` too — that is what the packaging script and CI build, so a file registered only in the pbxproj compiles in Xcode but is missing from the installed app.
 
-Both build systems use Swift 5 language mode: `Package.swift` declares `swift-tools-version: 5.9` with no `swiftLanguageMode`, and the Xcode target sets `SWIFT_VERSION = 5.0`. The code has not been audited for strict concurrency, so treat sendability warnings as expected and fix them in place — do not turn the language mode up to silence one. Likewise `.onChange(of:)` is deliberately left in the pre-macOS-14 form in `ContentView.swift`, because the zero-parameter version requires raising the deployment target.
+Both build systems use Swift 5 language mode: `Package.swift` declares `swift-tools-version: 5.9` with no `swiftLanguageMode`, and the Xcode target sets `SWIFT_VERSION = 5.0`. The code has not been audited for strict concurrency, so treat sendability warnings as expected and fix them in place — do not turn the language mode up to silence one. For the same reason, prefer the pre-macOS-14 `.onChange(of:) { value in }` form over the zero-parameter one, which requires raising the deployment target.
 
 ## Tests
 ```
@@ -43,7 +43,7 @@ swift test
 
 `ConversionQueueTests` drives the batch queue through an injected converter, so it needs neither a window nor LibreOffice. It covers name-ordered sequencing, per-file error isolation, re-queuing a failure on the next run, security-scope balance, aggregate progress arithmetic, cancellation, unsupported-file reporting, and bin scanning.
 
-`MultiFileDragTests` checks that a set of files becomes one drag item advertising `public.file-url`, and that the payload round-trips back to every URL in order. It cannot prove that the receiving app imports all of them rather than the first — that still needs a real drag. CI runs all three suites on a macOS runner on every push, and packages the app with the same script the install instructions use.
+CI runs both suites on a macOS runner on every push, and packages the app with the same script the install instructions use.
 
 ## Using it
 - Drop or choose any number of PDFs and `.pptx` files at once. The queue sorts them by name so a batch is predictable, and each row shows its own state.
@@ -52,11 +52,11 @@ swift test
 - Each document gets its own `Document Name JPEGs` folder in the persistent bin (`~/Library/Application Support/FileConverter/Bin`) and never overwrites an earlier conversion.
 
 ## Dragging into ProPresenter
-- Every image can be dragged individually, or use a document's **Drag All Images** handle for the whole set in one gesture.
-- **Drag Folder** (and **Drag Folders** for a multi-document selection) drops the folder itself, which is what ProPresenter wants to import a set as a sequence.
-- Click document rows to select them, then **Select All** and the combined drag handles appear. **Save…** copies a set to a folder you choose.
+- Every document in the bin has one **Drag All Images** handle. Drop it on ProPresenter and the document's whole `Name JPEGs` folder arrives as a sequence, so no selection step and no trip to Finder are needed.
+- Drag an individual thumbnail to move just that one image.
+- **Save…** copies a document's set to a folder you choose.
 
-"Drag All Images" sends the whole set as a *single* drag item containing a list of file URLs, which is how a Finder multi-selection behaves. An application that only accepts one file per drag item will take the first; use **Drag Folder** in that case.
+The handle drops the document's *folder*, not a bundle of loose files, and the folder icon on the handle says so. That is deliberate. A SwiftUI drag hands over a single `NSItemProvider`, so a list of URLs packed into one item does not arrive as many files — the receiving app takes the first and you get one slide. Finder avoids this by writing one pasteboard item per file, which requires an AppKit drag session. Dropping the folder sidesteps the limitation and matches what ProPresenter wants. If a deck ever needs only a middle range of slides, the bin has no control for that; the thumbnail drag is the only way to cherry-pick, one image at a time.
 
 ## Conversion behavior
 - PDF: PDFKit/Core Graphics renders each page directly to JPEG.
