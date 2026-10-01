@@ -1,6 +1,51 @@
 # ProSlide
 A macOS app that converts PDF and PowerPoint files into dependable JPEG images, ready to import into ProPresenter without destroying slide contents.
 
+## Installing ProSlide
+
+### Should you trust it?
+
+That is your call to make, so here is everything you need to decide rather than a request for faith.
+
+- **It is MIT-licensed**, so you are explicitly permitted to read all of it. See `LICENSE` and the source layout below.
+- **It is small: roughly 950 lines of shipped Swift** (355 in the app, 592 in the engine), plus 599 lines of tests. That is short enough to actually read end to end, not just skim.
+- **It contains no network code at all** — no `URLSession`, no `URLRequest`, no URLs. It cannot phone home, because there is nothing to phone home with.
+- **It stores no credentials**, and never touches the Keychain.
+- **It launches exactly one external program: LibreOffice**, at a path the app checks for first, to turn `.pptx` files into PDFs. Converting a PDF launches nothing. The only other system interaction is revealing a folder in Finder when you click **Open**.
+- The real risk is not the app but the documents: opening a PDF or PowerPoint file means trusting Apple's PDFKit and LibreOffice to parse it, exactly as Preview and Keynote do. See [Security considerations](#security-considerations) for that, and for the 8192 px / 300 page guards against pathological files.
+
+None of that makes it safe by assertion. It makes it auditable in a way that fits on one screen, which is the point.
+
+### Installing
+
+You will need macOS 13 or later, and either Xcode 15+ or the Swift Command Line Tools so `swift` is available. LibreOffice is needed only for `.pptx`; PDF conversion works without it.
+
+```
+git clone https://github.com/v3ndsxg/ProSlide.git
+cd ProSlide
+./Scripts/make-app-bundle.sh --install
+```
+
+That compiles a release build and copies a working `ProSlide.app` into `/Applications`. To open it, either
+
+```
+open /Applications/ProSlide.app
+```
+
+or just find **ProSlide** in Spotlight or Launchpad — once installed it is an ordinary app like any other.
+
+### If macOS refuses to open it
+
+The app is **ad-hoc signed** (`codesign -s -`) and is **not notarized**. There is no Apple-issued developer identity behind it, because it is not sold through the App Store, so Gatekeeper may object on first launch. Nothing is wrong with the build.
+
+Click through it by right-clicking the app in Finder and choosing **Open** once, or clear the quarantine flag:
+
+```
+xattr -dr com.apple.quarantine /Applications/ProSlide.app
+```
+
+Contributors should see [Install](#install) for the build flags, and the `Scripts/make-app-bundle.sh` header for the full usage.
+
 ## Requirements
 - macOS 13 or later
 - Swift 5.9 or later (Xcode 15+, or the Command Line Tools, to build)
@@ -17,6 +62,8 @@ A macOS app that converts PDF and PowerPoint files into dependable JPEG images, 
 The app links the engine as a local Swift package, so there is one copy of the rendering code and no duplicate `@main`. The batch queue lives in the library rather than the app specifically so batch behaviour is covered by `swift test` and CI, without needing a window.
 
 ## Install
+This section is for contributors and covers the build flags. Anyone just wanting to run the app should read [Installing ProSlide](#installing-proslide) first.
+
 ```
 ./Scripts/make-app-bundle.sh --install
 open /Applications/ProSlide.app
@@ -46,10 +93,16 @@ swift test
 CI runs both suites on a macOS runner on every push, and packages the app with the same script the install instructions use.
 
 ## Using it
-- Drop or choose any number of PDFs and `.pptx` files at once. The queue sorts them by name so a batch is predictable, and each row shows its own state.
-- Unsupported files are reported and skipped instead of failing the batch.
-- **Convert N files** runs them one at a time. One bad document never stops the rest; **Stop** cancels the run and leaves the unconverted files queued.
-- Each document gets its own `Document Name JPEGs` folder in the persistent bin (`~/Library/Application Support/FileConverter/Bin`) and never overwrites an earlier conversion.
+
+1. **Add your file or files.** Drag PDFs and `.pptx` files onto the panel, or click it to pick them. You can add more at any time.
+2. **Check the resolution.** Leave it at Full HD unless you have a reason; that is the right choice for most ProPresenter services.
+3. **Press Convert** (or ⌘↩). One at a time they run, and the panel shows what each file is doing. If a file fails, the rest still convert and the failure tells you why.
+4. **Wait for the Bin** to fill in on the right. Each document gets its own `Document Name JPEGs` folder, and the bin remembers everything you have converted, so it is still there next time you open the app. Documents are listed alphabetically.
+5. **Drag the card into ProPresenter.** That is the whole job. Every slide in that document arrives, in order, named `Document-001.jpg`, `Document-002.jpg`, and so on.
+
+If you need a slide that is not the whole document, drag its individual thumbnail instead of the card. And if you want the images somewhere other than ProPresenter, **Save…** copies a document's set to any folder you choose.
+
+Two details worth knowing: converting the same file again creates a second folder rather than overwriting the first, and **Stop** halts a batch without losing the files you have not converted yet.
 
 ## Dragging into ProPresenter
 - The whole document card in the bin is a drag source. Drop it on ProPresenter and the document's `Name JPEGs` folder arrives as a sequence, so no selection step and no trip to Finder are needed.
