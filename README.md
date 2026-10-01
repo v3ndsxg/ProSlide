@@ -52,11 +52,11 @@ CI runs both suites on a macOS runner on every push, and packages the app with t
 - Each document gets its own `Document Name JPEGs` folder in the persistent bin (`~/Library/Application Support/FileConverter/Bin`) and never overwrites an earlier conversion.
 
 ## Dragging into ProPresenter
-- Every document in the bin has one **Drag All Images** handle. Drop it on ProPresenter and the document's whole `Name JPEGs` folder arrives as a sequence, so no selection step and no trip to Finder are needed.
+- The whole document card in the bin is a drag source. Drop it on ProPresenter and the document's `Name JPEGs` folder arrives as a sequence, so no selection step and no trip to Finder are needed.
 - Drag an individual thumbnail to move just that one image.
 - **Save…** copies a document's set to a folder you choose.
 
-The handle drops the document's *folder*, not a bundle of loose files, and the folder icon on the handle says so. That is deliberate. A SwiftUI drag hands over a single `NSItemProvider`, so a list of URLs packed into one item does not arrive as many files — the receiving app takes the first and you get one slide. Finder avoids this by writing one pasteboard item per file, which requires an AppKit drag session. Dropping the folder sidesteps the limitation and matches what ProPresenter wants. If a deck ever needs only a middle range of slides, the bin has no control for that; the thumbnail drag is the only way to cherry-pick, one image at a time.
+A card drag carries the document's *folder*, not a bundle of loose files, and the folder icon on the card says so. That is deliberate. A SwiftUI drag hands over a single `NSItemProvider`, so a list of URLs packed into one item does not arrive as many files — the receiving app takes the first and you get one slide. Finder avoids this by writing one pasteboard item per file, which requires an AppKit drag session. Dragging the folder sidesteps the limitation and matches what ProPresenter wants. If a deck ever needs only a middle range of slides, the bin has no control for that; the thumbnail drag is the only way to cherry-pick, one image at a time.
 
 ## Conversion behavior
 - PDF: PDFKit/Core Graphics renders each page directly to JPEG.

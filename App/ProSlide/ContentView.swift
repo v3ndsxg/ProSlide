@@ -199,7 +199,7 @@ struct ContentView: View {
                 Button("Open Folder") { BinOpener.open(queue.binRootURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
             }
-            Text("Drag a document's Drag All Images handle into ProPresenter to bring in every slide at once. Drag a thumbnail to move just that one image.")
+            Text("Drag a document's card into ProPresenter to bring in every slide at once. Drag a single thumbnail to move just that one image.")
                 .font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -216,27 +216,19 @@ struct ContentView: View {
         .background(Color.secondary.opacity(0.06))
     }
 
-    /// The bin's one multi-image drag control: it drops a document's whole
-    /// JPEGs folder, which ProPresenter imports as a sequence.
+    /// The payload for dragging a whole document into ProPresenter: the
+    /// document's `Name JPEGs` folder, which ProPresenter imports as a
+    /// sequence.
     ///
-    /// This deliberately drags the folder rather than the individual images. A
-    /// SwiftUI drag can only ever hand over a single `NSItemProvider`, so
-    /// packing many URLs into one item does not arrive as many files — a
-    /// receiver takes the first. Finder gets this right by writing one
-    /// pasteboard item per file, which needs an AppKit drag session. Dropping
-    /// the folder sidesteps that entirely and is what ProPresenter wants.
-    private func dragHandle(folder: URL) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "folder.fill")
-            Text("Drag All Images")
-        }
-        .font(.caption.weight(.semibold))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Color.accentColor)
-        .foregroundStyle(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .onDrag { NSItemProvider(contentsOf: folder) ?? NSItemProvider(object: folder as NSURL) }
+    /// This deliberately carries the folder rather than the individual image
+    /// URLs. A SwiftUI drag can only ever hand over a single `NSItemProvider`,
+    /// so packing many URLs into one item does not arrive as many files — a
+    /// receiver takes the first and you get one slide. Finder gets this right
+    /// by writing one pasteboard item per file, which needs an AppKit drag
+    /// session. Dragging the folder sidesteps that limitation entirely and is
+    /// what ProPresenter wants.
+    private func cardDragItem(for folder: URL) -> NSItemProvider {
+        NSItemProvider(contentsOf: folder) ?? NSItemProvider(object: folder as NSURL)
     }
 
     private func binGroup(_ group: ConversionGroup) -> some View {
@@ -248,7 +240,12 @@ struct ContentView: View {
                 Button("Open") { BinOpener.open(group.folderURL) }
                 Button("Save…") { saveTarget = group; showingSaveImporter = true }
             }
-            dragHandle(folder: group.folderURL)
+            HStack(spacing: 5) {
+                Image(systemName: "folder.fill")
+                Text("Drag this card into ProPresenter")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
                 ForEach(group.imageURLs, id: \.self) { imageURL in
                     VStack(spacing: 4) {
@@ -267,8 +264,13 @@ struct ContentView: View {
             }
         }
         .padding(10)
-        .background(Color.green.opacity(0.1))
+        .background(Color.purple.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        // The whole card is the drag source. .contentShape is what makes the
+        // padding and empty space around the content draggable too, rather
+        // than only the text and thumbnails.
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onDrag { cardDragItem(for: group.folderURL) }
     }
 
     // MARK: - Drop
