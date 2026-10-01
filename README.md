@@ -18,6 +18,10 @@ None of that makes it safe by assertion. It makes it auditable in a way that fit
 
 ### Installing
 
+## Requirements
+- macOS 13 or later
+- Swift 5.9 or later (Xcode 15+, or the Command Line Tools, to build)
+- LibreOffice installed in `/Applications` for `.pptx` conversion. PDF conversion works without it.
 You will need macOS 13 or later, and either Xcode 15+ or the Swift Command Line Tools so `swift` is available. LibreOffice is needed only for `.pptx`; PDF conversion works without it.
 
 ```
@@ -46,11 +50,6 @@ xattr -dr com.apple.quarantine /Applications/ProSlide.app
 
 Contributors should see [Install](#install) for the build flags, and the `Scripts/make-app-bundle.sh` header for the full usage.
 
-## Requirements
-- macOS 13 or later
-- Swift 5.9 or later (Xcode 15+, or the Command Line Tools, to build)
-- LibreOffice installed in `/Applications` for `.pptx` conversion. PDF conversion works without it.
-
 ## Layout
 - `App/ProSlide/` — the app: `ProSlideApp.swift`, `ContentView.swift`, `BinOpener.swift` and its asset catalog.
 - `App/ProSlide.xcodeproj` — development only. Not needed to build, run, or install the app.
@@ -60,22 +59,6 @@ Contributors should see [Install](#install) for the build flags, and the `Script
 - `Scripts/make-app-bundle.sh` — assembles `ProSlide.app` from `swift build`.
 
 The app links the engine as a local Swift package, so there is one copy of the rendering code and no duplicate `@main`. The batch queue lives in the library rather than the app specifically so batch behaviour is covered by `swift test` and CI, without needing a window.
-
-## Install
-This section is for contributors and covers the build flags. Anyone just wanting to run the app should read [Installing ProSlide](#installing-proslide) first.
-
-```
-./Scripts/make-app-bundle.sh --install
-open /Applications/ProSlide.app
-```
-This compiles a release build with `swift build` and writes a signed `ProSlide.app`, then copies it to `/Applications`. It never touches `App/ProSlide.xcodeproj`, so it cannot be broken by an Xcode project problem.
-
-Without installing, `./Scripts/make-app-bundle.sh` writes `build/ProSlide.app`, which you can double-click in Finder. Pass `debug` before any other flag for a debug build, e.g. `./Scripts/make-app-bundle.sh debug`. To update an installed copy later, re-run the same command.
-
-If macOS ever refuses to open a build copied from another machine, clear the quarantine flag:
-```
-xattr -dr com.apple.quarantine /Applications/ProSlide.app
-```
 
 ## Develop in Xcode
 Open `App/ProSlide.xcodeproj` for breakpoints and SwiftUI previews. When you add or rename a file under `App/ProSlide/`, add it to the `ProSlideApp` target in `Package.swift` too — that is what the packaging script and CI build, so a file registered only in the pbxproj compiles in Xcode but is missing from the installed app.
