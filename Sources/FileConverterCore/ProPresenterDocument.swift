@@ -29,12 +29,18 @@ enum ProPresenterDocument {
     // rv.data.Cue
     private enum CompletionActionType: UInt64 { case last = 1 }
 
+    // rv.data.URL.LocalRelativePath.Root
+    private enum Root {
+        /// Resolved by ProPresenter against the bundle being imported.
+        static let currentResource: UInt64 = 12
+    }
+
     // rv.data.Media.Metadata
     private enum ColorFormat: UInt64 { case sdr = 1 }
 
-    /// ProPresenter writes the uppercase form for JPEG and lowercase for PNG,
-    /// so this matches what it wrote for a `.jpg`.
-    private static let jpegFormatIdentifier = "JPG"
+    /// ProPresenter's own bundles record the format in lowercase, so this
+    /// matches what it writes for a `.jpg`.
+    private static let jpegFormatIdentifier = "jpg"
 
     /// Measured at roughly 700 bytes per slide, so this keeps a full 300-page deck
     /// to a single allocation.
@@ -42,10 +48,12 @@ enum ProPresenterDocument {
 
     // MARK: - Entry point
 
-    /// Serialises a presentation named `name` holding `slides`, in order.
+    /// Serialises the manifest for a presentation named `name` holding `slides`, in
+    /// order.
     ///
-    /// Each slide carries its own `MediaReference`, so the same call produces
-    /// both a bundled and an unbundled manifest; only the references differ.
+    /// Each slide's media is referenced by bare filename against
+    /// `ROOT_CURRENT_RESOURCE`, which is what makes the surrounding bundle
+    /// portable.
     static func encode(name: String, slides: [ProSlide]) -> Data {
         var document = ProtoWriter(reservingCapacity: slides.count * estimatedSlideByteCount)
 
@@ -69,6 +77,9 @@ enum ProPresenterDocument {
         for slide in slides {
             document.data(13, cue(for: slide))
         }
+
+        // One group holding every cue, in order: that is what gives the
+        // deck its sequence in ProPresenter's slide list.
         document.data(12, cueGroup(for: slides.count))
 
         return document.data
@@ -119,7 +130,7 @@ enum ProPresenterDocument {
         action.message(20) { media in
             media.message(5) { element in
                 element.message(1) { uuid in uuid.string(1, newUUID()) }
-                element.message(2) { url in writeURL(&url, slide.reference) }
+                element.message(2) { url in writeURL(&url, filename: slide.imageURL.lastPathComponent) }
                 element.message(3) { metadata in
                     metadata.string(5, jpegFormatIdentifier)
                     metadata.uint(6, ColorFormat.sdr.rawValue)
@@ -143,7 +154,7 @@ enum ProPresenterDocument {
                         drawing.bool(16, true)
                     }
                     type.message(2) { file in
-                        file.message(1) { localURL in writeURL(&localURL, slide.reference) }
+                        file.message(1) { localURL in writeURL(&localURL, filename: slide.imageURL.lastPathComponent) }
                     }
                 }
             }
@@ -174,12 +185,22 @@ enum ProPresenterDocument {
         writer.double(2, Double(pixels.height))
     }
 
-    private static func writeURL(_ writer: inout ProtoWriter, _ reference: MediaReference) {
-        writer.string(1, reference.absoluteString)
+    /// Writes the URL for one slide's media.
+    ///
+    /// A bundle stores its images as flat entries at the ZIP root, so the path is
+    /// just the filename and the root is `ROOT_CURRENT_RESOURCE`, which
+    /// ProPresenter resolves against the bundle itself.
+    ///
+    /// `ROOT_SHOW` is deliberately *not* used. It looks like the natural choice —
+    /// it is named "show", and one third-party encoder uses it — but it points at
+    /// ProPresenter's own library directory, not the bundle. A bundle written that
+    /// way imports with no images, which is exactly the bug this replaced.
+    private static func writeURL(_ writer: inout ProtoWriter, filename: String) {
+        writer.string(1, filename)
         writer.uint(3, Platform.macOS.rawValue)
         writer.message(4) { local in
-            local.uint(1, reference.root)
-            local.string(2, reference.path)
+            local.uint(1, Root.currentResource)
+            local.string(2, filename)
         }
     }
 

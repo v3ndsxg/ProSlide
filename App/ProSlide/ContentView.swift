@@ -199,8 +199,16 @@ struct ContentView: View {
                 Button("Open Folder") { BinOpener.open(queue.binRootURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
             }
-            Text("Drag a document's card into ProPresenter to bring in every slide at once. Drag a single thumbnail to move just that one image.")
-                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Toggle("Drag as a bundle", isOn: $queue.dragsBundles)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                if queue.dragsBundles {
+                    Button("Open Packages") { BinOpener.open(queue.binPackagesURL) }
+                        .font(.caption)
+                }
+            }
+            Text(binHint).font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(queue.groups) { group in
@@ -216,9 +224,16 @@ struct ContentView: View {
         .background(Color.secondary.opacity(0.06))
     }
 
-    /// The payload for dragging a whole document into ProPresenter: the
-    /// document's `Name JPEGs` folder, which ProPresenter imports as a
-    /// sequence.
+    private var binHint: String {
+        queue.dragsBundles
+            ? "Each card is packaged as a self-contained .probundle you can move or share anywhere. Bundles are built in the background, so a card still being built falls back to its JPEG folder."
+            : "Drag a document's card into ProPresenter to bring in every slide at once. Drag a single thumbnail to move just that one image."
+    }
+
+    /// The payload for dragging a whole document into ProPresenter.
+    ///
+    /// By default that is the document's `Name JPEGs` folder, which ProPresenter
+    /// imports as a sequence.
     ///
     /// This deliberately carries the folder rather than the individual image
     /// URLs. A SwiftUI drag can only ever hand over a single `NSItemProvider`,
@@ -227,8 +242,21 @@ struct ContentView: View {
     /// by writing one pasteboard item per file, which needs an AppKit drag
     /// session. Dragging the folder sidesteps that limitation entirely and is
     /// what ProPresenter wants.
-    private func cardDragItem(for folder: URL) -> NSItemProvider {
-        NSItemProvider(contentsOf: folder) ?? NSItemProvider(object: folder as NSURL)
+    ///
+    /// With bundles on it is the one `.probundle` file instead, and the same
+    /// single-item constraint applies.
+    ///
+    /// The mode is checked *before* the cache, deliberately. An earlier version
+    /// looked the cache up first, so once any bundle had been built, JPEG-folder
+    /// drags quietly handed over the bundle instead and the original workflow
+    /// looked broken. A deck whose bundle isn't ready falls back to the folder so
+    /// a drag is never a no-op.
+    private func cardDragItem(for group: ConversionGroup) -> NSItemProvider {
+        if queue.dragsBundles, let bundle = queue.package(for: group) {
+            return NSItemProvider(contentsOf: bundle) ?? NSItemProvider(object: bundle as NSURL)
+        }
+        return NSItemProvider(contentsOf: group.folderURL)
+            ?? NSItemProvider(object: group.folderURL as NSURL)
     }
 
     private func binGroup(_ group: ConversionGroup) -> some View {
@@ -237,12 +265,17 @@ struct ContentView: View {
                 Text(group.sourceName).font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Text("\(group.imageURLs.count) images").font(.caption).foregroundStyle(.secondary)
+                if queue.dragsBundles {
+                    Button(queue.package(for: group) == nil ? "Bundle" : "Rebuild") {
+                        queue.packageNow(group)
+                    }
+                }
                 Button("Open") { BinOpener.open(group.folderURL) }
                 Button("Save…") { saveTarget = group; showingSaveImporter = true }
             }
             HStack(spacing: 5) {
-                Image(systemName: "folder.fill")
-                Text("Drag this card into ProPresenter")
+                Image(systemName: cardDragIcon(for: group))
+                Text(cardDragCaption(for: group))
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -270,7 +303,24 @@ struct ContentView: View {
         // padding and empty space around the content draggable too, rather
         // than only the text and thumbnails.
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onDrag { cardDragItem(for: group.folderURL) }
+        .onDrag { cardDragItem(for: group) }
+    }
+
+    private func cardDragIcon(for group: ConversionGroup) -> String {
+        guard queue.dragsBundles else { return "folder.fill" }
+        return queue.package(for: group) == nil ? "clock" : "shippingbox.fill"
+    }
+
+    private func cardDragCaption(for group: ConversionGroup) -> String {
+        guard queue.dragsBundles else {
+            return "Drag this card into ProPresenter"
+        }
+        if let failure = queue.packageFailures[group.id] {
+            return "Bundle failed: \(failure)"
+        }
+        return queue.package(for: group) == nil
+            ? "Building bundle\u{2026}"
+            : "Drag this card to open it as a presentation"
     }
 
     // MARK: - Drop

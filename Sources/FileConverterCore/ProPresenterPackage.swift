@@ -3,39 +3,41 @@ import Foundation
 import ImageIO
 #endif
 
-/// Turns a converted deck's JPEGs into something ProPresenter can open
-/// directly, instead of a folder the user has to drag in slide by slide.
+/// Turns a converted deck's JPEGs into a ProPresenter bundle: one `.probundle`
+/// file that opens as a named presentation with every image already attached.
 ///
-/// Two shapes are produced, both driven by `ProPackageFormat`:
+/// A `.probundle` is a ZIP holding the `.pro` manifest plus the images it refers
+/// to, with the manifest pointing at them *relative to the bundle*. That
+/// self-containment is the whole point: the bundle can be moved, mailed, put on
+/// a stick, or dragged anywhere, and the images still resolve.
 ///
-/// - A `.probundle` is a ZIP holding the `.pro` manifest and a copy of every
-///   JPEG under `Media/Assets`. The manifest points at them with ProPresenter's
-///   `ROOT_SHOW` relative root, so the bundle works wherever it is moved to.
-/// - A bare `.pro` is the same manifest pointing at the JPEGs where they
-///   already are, relative to the user's home folder.
+/// A bare `.pro` manifest is deliberately not produced. The format has no field
+/// for image data anywhere in its media path, so a `.pro` can only ever point at
+/// images already sitting at a fixed path on the machine that made it — useless
+/// to anyone it is sent to. Bundles are the only form worth writing.
 ///
-/// Both are written into the deck's own folder, so clearing the bin takes them
-/// with it and rescanning the bin ignores them (it only looks at `.jpg`).
+/// Bundles are written to `BinStorage.packagesDirectory`, not into the deck's
+/// own folder, so `scanBin` cannot mistake one for a deck and clearing the bin
+/// has a single obvious meaning.
 public enum ProPresenterPackage {
 
-    /// Where ProPresenter expects assets to live inside a bundle.
-    public static let bundleAssetDirectory = "Media/Assets"
-
-    /// The suffix `ConversionEngine` gives a deck's folder.
-    private static let jpegFolderSuffix = " JPEGs"
+    /// The extension ProPresenter gives these.
+    public static let fileExtension = "probundle"
 
     // MARK: - Packaging
 
-    /// Packages `group` into its own folder and returns the file written.
+    /// Packages `group` and returns the bundle written.
     ///
     /// - Parameters:
     ///   - group: the converted deck to package.
-    ///   - format: which of the two shapes to produce.
+    ///   - destinationDirectory: where to write the bundle. Defaults to the
+    ///     bin's `Packages` folder.
     ///   - pixelSize: resolves an image's dimensions. Injectable so the writer
     ///     can be tested without decoding real images.
+    @discardableResult
     public static func package(
         group: ConversionGroup,
-        format: ProPackageFormat,
+        destinationDirectory: URL = BinStorage.packagesDirectory,
         pixelSize: (URL) -> PixelSize?
     ) throws -> URL {
         let images = group.imageURLs
@@ -44,91 +46,59 @@ public enum ProPresenterPackage {
         }
 
         let name = presentationName(for: group)
-        let home = FileManager.default.homeDirectoryForCurrentUser
         let slides = try images.map { url -> ProSlide in
             guard let size = pixelSize(url) else {
                 throw ProPackageError.unreadableImage(url.lastPathComponent)
             }
-            let reference: MediaReference
-            switch format {
-            case .probundle:
-                reference = .bundleAsset(named: url.lastPathComponent)
-            case .proFile:
-                guard let relative = MediaReference.userHome(url, home: home) else {
-                    throw ProPackageError.outsideHomeDirectory(url.lastPathComponent)
-                }
-                reference = relative
-            }
-            return ProSlide(imageURL: url, pixelSize: size, reference: reference)
+            return ProSlide(imageURL: url, pixelSize: size)
         }
 
-        let manifest = ProPresenterDocument.encode(name: name, slides: slides)
-        let destination = group.folderURL
+        let destination = destinationDirectory
             .appendingPathComponent(name)
-            .appendingPathExtension(format.fileExtension)
+            .appendingPathExtension(fileExtension)
 
-        switch format {
-        case .probundle:
-            try writeBundle(manifest: manifest, name: name, slides: slides, to: destination)
-        case .proFile:
-            try write(manifest, to: destination)
-        }
-        return destination
-    }
-
-    /// Convenience overload that reads each image's real pixel dimensions.
-    public static func package(
-        group: ConversionGroup,
-        format: ProPackageFormat
-    ) throws -> URL {
-        try package(group: group, format: format, pixelSize: pixelSize(ofImageAt:))
-    }
-
-    // MARK: - Naming
-
-    /// ProPresenter shows this name, and it is also the manifest's filename
-    /// inside the bundle. The deck's folder is called `Name JPEGs`, so strip
-    /// that suffix to get back to the document's own name.
-    static func presentationName(for group: ConversionGroup) -> String {
-        let folder = group.sourceName
-        guard folder.hasSuffix(jpegFolderSuffix) else { return folder }
-        let trimmed = String(folder.dropLast(jpegFolderSuffix.count))
-        return trimmed.isEmpty ? folder : trimmed
-    }
-
-    // MARK: - Writing
-
-    private static func writeBundle(
-        manifest: Data,
-        name: String,
-        slides: [ProSlide],
-        to destination: URL
-    ) throws {
         do {
             let archive = try ZipArchiveWriter(to: destination)
-            try archive.addEntry(path: "\(name).pro", data: manifest)
+            try archive.addEntry(path: "\(name).pro", data: manifest(for: slides, name: name))
+            // Flat filenames at the ZIP root, which is what the manifest's
+            // ROOT_CURRENT_RESOURCE paths refer to. A nested `Media/Assets/`
+            // folder imports with nothing visible.
             for slide in slides {
-                try archive.addFile(
-                    at: slide.imageURL,
-                    path: "\(bundleAssetDirectory)/\(slide.imageURL.lastPathComponent)"
-                )
+                try archive.addFile(at: slide.imageURL, path: slide.imageURL.lastPathComponent)
             }
             try archive.close()
         } catch let failure as ZipArchiveWriter.Failure {
             throw ProPackageError.writeFailed(failure.errorDescription ?? "")
         }
+        return destination
     }
 
-    private static func write(_ data: Data, to url: URL) throws {
-        do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try data.write(to: url, options: .atomic)
-        } catch {
-            throw ProPackageError.writeFailed("The file could not be saved.")
-        }
+    /// Convenience overload that reads each image's real pixel dimensions.
+    @discardableResult
+    public static func package(
+        group: ConversionGroup,
+        destinationDirectory: URL = BinStorage.packagesDirectory
+    ) throws -> URL {
+        try package(group: group, destinationDirectory: destinationDirectory, pixelSize: pixelSize(ofImageAt:))
+    }
+
+    // MARK: - Naming
+
+    /// The presentation's name, and the filename of the manifest inside the
+    /// bundle. A deck's folder is called `Name JPEGs`, so strip that suffix to
+    /// get back to the document's own name.
+    static func presentationName(for group: ConversionGroup) -> String {
+        let folder = group.sourceName
+        let suffix = " JPEGs"
+        guard folder.hasSuffix(suffix) else { return folder }
+        let trimmed = String(folder.dropLast(suffix.count))
+        return trimmed.isEmpty ? folder : trimmed
+    }
+
+    // MARK: - Manifest
+
+    private static func manifest(for slides: [ProSlide], name: String) -> Data {
+        ProPresenterDocument.encode(name: name, slides: slides)
     }
 
     // MARK: - Image dimensions

@@ -23,6 +23,18 @@ public enum BinStorage {
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         return bin
     }
+
+    /// Where ProPresenter bundles are written.
+    ///
+    /// A folder of its own rather than a file inside each deck's folder, so that
+    /// `scanBin` cannot mistake a bundle for a deck and so that clearing the
+    /// bin has one obvious meaning. `scanBin` already skips it, because it
+    /// contains no JPEGs.
+    public static var packagesDirectory: URL {
+        let packages = rootURL.appendingPathComponent("Packages", isDirectory: true)
+        try? FileManager.default.createDirectory(at: packages, withIntermediateDirectories: true)
+        return packages
+    }
 }
 
 public struct ConversionOptions: Sendable {
@@ -94,47 +106,6 @@ public struct ConversionGroup: Identifiable, Equatable, Sendable {
     }
 }
 
-/// How a converted deck is packaged for ProPresenter.
-///
-/// Both forms describe the same slides. The difference is where ProPresenter
-/// looks for the images.
-public enum ProPackageFormat: String, CaseIterable, Identifiable, Sendable {
-    /// A `.probundle`: a ZIP holding the `.pro` manifest alongside the JPEGs,
-    /// which the manifest points at with ProPresenter's `ROOT_SHOW` relative
-    /// root. Self-contained, so it can be moved, mailed or dragged anywhere.
-    case probundle
-
-    /// A bare `.pro` manifest pointing at the JPEGs where they already are.
-    /// Smaller, but the links break if the deck folder moves off this machine.
-    case proFile
-
-    public var id: String { rawValue }
-
-    public var fileExtension: String {
-        switch self {
-        case .probundle: "probundle"
-        case .proFile: "pro"
-        }
-    }
-}
-
-public enum ProPackageError: LocalizedError, Equatable {
-    case noImages(String)
-    case unreadableImage(String)
-    case outsideHomeDirectory(String)
-    case writeFailed(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .noImages(let name): "\(name) has no JPEGs to package."
-        case .unreadableImage(let name): "The size of \(name) could not be read."
-        case .outsideHomeDirectory(let name):
-            "\(name) is not inside your home folder, so a .pro file cannot reference it."
-        case .writeFailed(let detail): "The ProPresenter package could not be written. \(detail)"
-        }
-    }
-}
-
 /// Pixel dimensions of a slide image. Deliberately not `CGSize`: nothing in
 /// the ProPresenter writer needs CoreGraphics, which keeps that code testable
 /// off macOS.
@@ -152,63 +123,29 @@ public struct PixelSize: Equatable, Sendable {
 public struct ProSlide: Equatable, Sendable {
     public let imageURL: URL
     public let pixelSize: PixelSize
-    /// Where ProPresenter should find `imageURL`. This is the only thing that
-    /// differs between a bundled and an unbundled deck.
-    public let reference: MediaReference
     /// Shown in ProPresenter's slide list. Defaults to the filename, which is
     /// what ProPresenter itself uses for imported media.
     public let label: String
 
-    public init(imageURL: URL, pixelSize: PixelSize, reference: MediaReference, label: String? = nil) {
+    public init(imageURL: URL, pixelSize: PixelSize, label: String? = nil) {
         self.imageURL = imageURL
         self.pixelSize = pixelSize
-        self.reference = reference
         self.label = label ?? imageURL.lastPathComponent
     }
 }
 
-/// Where ProPresenter should look for one slide's image.
-public struct MediaReference: Equatable, Sendable {
-    /// The `file://` URL ProPresenter shows when the media cannot be resolved.
-    public let absoluteString: String
-    /// `URL.LocalRelativePath.Root`, as an integer straight from the schema.
-    public let root: UInt64
-    /// Path relative to `root`.
-    public let path: String
+public enum ProPackageError: LocalizedError, Equatable {
+    case noImages(String)
+    case unreadableImage(String)
+    case writeFailed(String)
 
-    public init(absoluteString: String, root: UInt64, path: String) {
-        self.absoluteString = absoluteString
-        self.root = root
-        self.path = path
+    public var errorDescription: String? {
+        switch self {
+        case .noImages(let name): "\(name) has no JPEGs to package."
+        case .unreadableImage(let name): "The size of \(name) could not be read."
+        case .writeFailed(let detail): "The ProPresenter bundle could not be written. \(detail)"
+        }
     }
-
-    /// Inside a `.probundle`, the images sit beside the manifest under
-    /// `Media/Assets`, which is what `ROOT_SHOW` points at.
-    public static func bundleAsset(named name: String) -> MediaReference {
-        MediaReference(
-            absoluteString: "file:///Library/Application%20Support/ProPresenter/Media/Assets/"
-                + ProPresenterDocument.percentEncoded(name),
-            root: MediaReference.showRoot,
-            path: "Media/Assets/\(name)"
-        )
-    }
-
-    /// A path under the user's home folder, expressed relative to it so the
-    /// deck survives the account's home moving or the folder being synced.
-    public static func userHome(_ url: URL, home: URL) -> MediaReference? {
-        let rootPath = home.standardizedFileURL.path
-        let filePath = url.standardizedFileURL.path
-        guard filePath.hasPrefix(rootPath + "/") else { return nil }
-        let relative = String(filePath.dropFirst(rootPath.count + 1))
-        return MediaReference(
-            absoluteString: url.absoluteString,
-            root: MediaReference.userHomeRoot,
-            path: relative
-        )
-    }
-
-    static let userHomeRoot: UInt64 = 2
-    static let showRoot: UInt64 = 10
 }
 
 public enum ConversionError: LocalizedError, Equatable {
