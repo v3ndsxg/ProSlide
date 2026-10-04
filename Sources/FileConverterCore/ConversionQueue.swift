@@ -31,6 +31,18 @@ public final class ConversionQueue: ObservableObject {
     @Published public private(set) var isConverting = false
     @Published public var message: String?
 
+    /// Which shape the bin's drag gesture should hand to ProPresenter.
+    /// `nil` means "the JPEG folder", the app's original behaviour.
+    @Published public private(set) var dragPayload: ProPackageFormat?
+
+    /// Where each deck's ProPresenter package ended up, keyed by deck folder
+    /// path. Populated lazily so switching the drag payload back and forth never
+    /// makes the user wait.
+    @Published public private(set) var packages: [String: URL] = [:]
+
+    /// Decks whose package is missing or out of date, keyed by deck folder path.
+    @Published public private(set) var packagingFailures: [String: String] = [:]
+
     public var binRootURL: URL { BinStorage.rootURL }
 
     /// The single-file conversion injected by the initialiser. Deliberately
@@ -38,6 +50,7 @@ public final class ConversionQueue: ObservableObject {
     /// share a name in one type.
     private let convertOne: ConvertOperation
     private var runTask: Task<Void, Never>?
+    private var packagingTask: Task<Void, Never>?
     private var temporaryProfile: URL?
 
     /// Which security scope was taken for each item, so it is released
@@ -239,6 +252,8 @@ public final class ConversionQueue: ObservableObject {
                 ConversionQueue.scanBin(at: root)
             }.value
             self?.groups = scanned
+            self?.discardPackages(forFoldersMissingFrom: scanned)
+            self?.rebuildPackagesIfNeeded()
         }
     }
 
@@ -252,6 +267,80 @@ public final class ConversionQueue: ObservableObject {
         }
     }
 
+    // MARK: - ProPresenter packaging
+
+    /// Chooses what the bin's drag gesture hands over. Passing `nil` restores
+    /// dragging the JPEG folder.
+    public func setDragPayload(_ format: ProPackageFormat?) {
+        guard format != dragPayload else { return }
+        dragPayload = format
+        packages = [:]
+        packagingFailures = [:]
+        rebuildPackagesIfNeeded()
+    }
+
+    /// The file to drag for `group`, or nil when it should fall back to the
+    /// JPEG folder.
+    public func package(for group: ConversionGroup) -> URL? {
+        packages[group.id]
+    }
+
+    /// Packages one deck now, bypassing the cache. This is what the per-card
+    /// button calls, so a deck can be rebuilt after its JPEGs changed.
+    public func packageNow(_ group: ConversionGroup) {
+        guard let format = dragPayload else { return }
+        let result = Task.detached(priority: .userInitiated) {
+            Result { try ProPresenterPackage.package(group: group, format: format) }
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            switch await result.value {
+            case .success(let url):
+                packages[group.id] = url
+                packagingFailures[group.id] = nil
+            case .failure(let error):
+                packages[group.id] = nil
+                packagingFailures[group.id] = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// Packages every deck that has no current package, off the main actor.
+    private func rebuildPackagesIfNeeded() {
+        guard let format = dragPayload else { return }
+        let outstanding = groups.filter { packages[$0.id] == nil && packagingFailures[$0.id] == nil }
+        guard !outstanding.isEmpty else { return }
+        // Replace any run still in flight: its results are for the old format.
+        packagingTask?.cancel()
+        packagingTask = Task { [weak self] in
+            for group in outstanding {
+                if Task.isCancelled { return }
+                guard let self else { return }
+                let result = await Task.detached(priority: .utility) {
+                    Result { try ProPresenterPackage.package(group: group, format: format) }
+                }.value
+                switch result {
+                case .success(let url):
+                    packages[group.id] = url
+                case .failure(let error):
+                    packagingFailures[group.id] = (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                }
+            }
+        }
+    }
+
+    /// Drops cache entries for decks that have gone from the bin, so clearing the
+    /// bin does not leave URLs pointing at deleted folders.
+    private func discardPackages(forFoldersMissingFrom scanned: [ConversionGroup]) {
+        let live = Set(scanned.map(\.id))
+        packages = packages.filter { live.contains($0.key) }
+        packagingFailures = packagingFailures.filter { live.contains($0.key) }
+    }
+
+    // MARK: - Bin actions
+
     public func save(group: ConversionGroup, to destination: URL) throws {
         let scoped = destination.startAccessingSecurityScopedResource()
         defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
@@ -264,6 +353,9 @@ public final class ConversionQueue: ObservableObject {
     }
 
     public func clearBin() throws {
+        packagingTask?.cancel()
+        packages = [:]
+        packagingFailures = [:]
         for folder in groups.map(\.folderURL) {
             try FileManager.default.removeItem(at: folder)
         }
