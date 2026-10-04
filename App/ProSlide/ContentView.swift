@@ -191,35 +191,6 @@ struct ContentView: View {
 
     // MARK: - Bin
 
-    /// What the bin's drag gesture hands to ProPresenter. The JPEG folder is the
-    /// original behaviour and the default; the other two package the deck first.
-    private enum DragChoice: String, CaseIterable, Identifiable {
-        case jpegs
-        case probundle
-        case proFile
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .jpegs: "JPEGs"
-            case .probundle: ".probundle"
-            case .proFile: ".pro"
-            }
-        }
-
-        /// nil means "no packaging", i.e. drag the folder as-is.
-        var format: ProPackageFormat? {
-            switch self {
-            case .jpegs: nil
-            case .probundle: .probundle
-            case .proFile: .proFile
-            }
-        }
-    }
-
-    @State private var dragChoice = DragChoice.jpegs
-
     private var binPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -228,21 +199,7 @@ struct ContentView: View {
                 Button("Open Folder") { BinOpener.open(queue.binRootURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
             }
-            HStack(spacing: 8) {
-                Text("Drag as").font(.caption).foregroundStyle(.secondary)
-                Picker("Drag as", selection: $dragChoice) {
-                    ForEach(DragChoice.allCases) { choice in
-                        Text(choice.title).tag(choice)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 260)
-                .onChange(of: dragChoice) { choice in
-                    queue.setDragPayload(choice.format)
-                }
-            }
-            Text(dragHint)
+            Text("Drag a document's card into ProPresenter to bring in every slide at once. Drag a single thumbnail to move just that one image.")
                 .font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -259,21 +216,9 @@ struct ContentView: View {
         .background(Color.secondary.opacity(0.06))
     }
 
-    private var dragHint: String {
-        switch dragChoice {
-        case .jpegs:
-            "Drag a document's card into ProPresenter to bring in every slide at once. Drag a single thumbnail to move just that one image."
-        case .probundle:
-            "Each card is packaged as a self-contained .probundle you can move or share anywhere. It is built in the background, so the first drag after switching may fall back to the JPEG folder."
-        case .proFile:
-            "Each card gets a .pro file beside its JPEGs. Smaller than a bundle, but the links only work while the JPEGs stay in this folder."
-        }
-    }
-
-    /// The payload for dragging a whole document into ProPresenter.
-    ///
-    /// In the default mode this is the document's `Name JPEGs` folder, which
-    /// ProPresenter imports as a sequence.
+    /// The payload for dragging a whole document into ProPresenter: the
+    /// document's `Name JPEGs` folder, which ProPresenter imports as a
+    /// sequence.
     ///
     /// This deliberately carries the folder rather than the individual image
     /// URLs. A SwiftUI drag can only ever hand over a single `NSItemProvider`,
@@ -282,17 +227,8 @@ struct ContentView: View {
     /// by writing one pasteboard item per file, which needs an AppKit drag
     /// session. Dragging the folder sidesteps that limitation entirely and is
     /// what ProPresenter wants.
-    ///
-    /// In the packaging modes the same single-item constraint applies, so the
-    /// payload becomes the one `.probundle` or `.pro` file. Packaging happens
-    /// ahead of the drag, on the queue; a deck that has not been packaged yet
-    /// falls back to the folder so a drag is never a no-op.
-    private func cardDragItem(for group: ConversionGroup) -> NSItemProvider {
-        if let package = queue.package(for: group) {
-            return NSItemProvider(contentsOf: package) ?? NSItemProvider(object: package as NSURL)
-        }
-        return NSItemProvider(contentsOf: group.folderURL)
-            ?? NSItemProvider(object: group.folderURL as NSURL)
+    private func cardDragItem(for folder: URL) -> NSItemProvider {
+        NSItemProvider(contentsOf: folder) ?? NSItemProvider(object: folder as NSURL)
     }
 
     private func binGroup(_ group: ConversionGroup) -> some View {
@@ -301,15 +237,12 @@ struct ContentView: View {
                 Text(group.sourceName).font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Text("\(group.imageURLs.count) images").font(.caption).foregroundStyle(.secondary)
-                if dragChoice.format != nil {
-                    Button(packageButtonTitle(for: group)) { queue.packageNow(group) }
-                }
                 Button("Open") { BinOpener.open(group.folderURL) }
                 Button("Save…") { saveTarget = group; showingSaveImporter = true }
             }
             HStack(spacing: 5) {
-                Image(systemName: cardDragIcon(for: group))
-                Text(cardDragCaption(for: group))
+                Image(systemName: "folder.fill")
+                Text("Drag this card into ProPresenter")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -337,29 +270,7 @@ struct ContentView: View {
         // padding and empty space around the content draggable too, rather
         // than only the text and thumbnails.
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onDrag { cardDragItem(for: group) }
-    }
-
-    private func cardDragIcon(for group: ConversionGroup) -> String {
-        guard dragChoice.format != nil else { return "folder.fill" }
-        return queue.package(for: group) == nil ? "clock" : "shippingbox.fill"
-    }
-
-    private func cardDragCaption(for group: ConversionGroup) -> String {
-        guard let format = dragChoice.format else {
-            return "Drag this card into ProPresenter"
-        }
-        if let failure = queue.packagingFailures[group.id] {
-            return "Packaging failed: \(failure)"
-        }
-        if queue.package(for: group) == nil {
-            return "Packaging \(format.fileExtension)…"
-        }
-        return "Drag this card to open as a presentation"
-    }
-
-    private func packageButtonTitle(for group: ConversionGroup) -> String {
-        queue.package(for: group) == nil ? "Package" : "Rebuild"
+        .onDrag { cardDragItem(for: group.folderURL) }
     }
 
     // MARK: - Drop
