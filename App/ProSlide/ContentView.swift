@@ -199,15 +199,6 @@ struct ContentView: View {
                 Button("Open Folder") { BinOpener.open(queue.binRootURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
             }
-            HStack(spacing: 8) {
-                Toggle("Drag as a bundle", isOn: $queue.dragsBundles)
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-                if queue.dragsBundles {
-                    Button("Open Packages") { BinOpener.open(queue.binPackagesURL) }
-                        .font(.caption)
-                }
-            }
             Text(binHint).font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -225,35 +216,32 @@ struct ContentView: View {
     }
 
     private var binHint: String {
-        queue.dragsBundles
-            ? "Each card is packaged as a self-contained .probundle you can move or share anywhere. Bundles are built in the background, so a card still being built falls back to its JPEG folder."
-            : "Drag a document's card into ProPresenter to bring in every slide at once. Drag a single thumbnail to move just that one image."
+        var hint = "Each card is a .pro presentation written beside its JPEGs. Keep the folder together when you move it: the .pro points at the images next to it."
+        if queue.groups.contains { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil } {
+            hint += " They are written in the background, so a card still being written drags its JPEG folder instead."
+        }
+        return hint
     }
 
     /// The payload for dragging a whole document into ProPresenter.
     ///
-    /// By default that is the document's `Name JPEGs` folder, which ProPresenter
-    /// imports as a sequence.
+    /// That is the deck's `.pro` presentation, which ProPresenter imports as one
+    /// named presentation with every slide attached. Before it has been written,
+    /// the card falls back to the document's `Name JPEGs` folder, which
+    /// ProPresenter imports as a plain sequence — a drag is never a no-op.
     ///
-    /// This deliberately carries the folder rather than the individual image
-    /// URLs. A SwiftUI drag can only ever hand over a single `NSItemProvider`,
-    /// so packing many URLs into one item does not arrive as many files — a
-    /// receiver takes the first and you get one slide. Finder gets this right
-    /// by writing one pasteboard item per file, which needs an AppKit drag
-    /// session. Dragging the folder sidesteps that limitation entirely and is
-    /// what ProPresenter wants.
+    /// The fallback deliberately ignores *why* the presentation is missing. A card
+    /// whose write failed would otherwise have nothing to drag at all, and the
+    /// folder is always there.
     ///
-    /// With bundles on it is the one `.probundle` file instead, and the same
-    /// single-item constraint applies.
-    ///
-    /// The mode is checked *before* the cache, deliberately. An earlier version
-    /// looked the cache up first, so once any bundle had been built, JPEG-folder
-    /// drags quietly handed over the bundle instead and the original workflow
-    /// looked broken. A deck whose bundle isn't ready falls back to the folder so
-    /// a drag is never a no-op.
+    /// This carries a single file rather than the individual image URLs. A
+    /// SwiftUI drag can only ever hand over a single `NSItemProvider`, so packing
+    /// many URLs into one item does not arrive as many files — a receiver takes
+    /// the first and you get one slide. Finder gets this right by writing one
+    /// pasteboard item per file, which needs an AppKit drag session.
     private func cardDragItem(for group: ConversionGroup) -> NSItemProvider {
-        if queue.dragsBundles, let bundle = queue.package(for: group) {
-            return NSItemProvider(contentsOf: bundle) ?? NSItemProvider(object: bundle as NSURL)
+        if let presentation = queue.presentation(for: group) {
+            return NSItemProvider(contentsOf: presentation) ?? NSItemProvider(object: presentation as NSURL)
         }
         return NSItemProvider(contentsOf: group.folderURL)
             ?? NSItemProvider(object: group.folderURL as NSURL)
@@ -265,9 +253,9 @@ struct ContentView: View {
                 Text(group.sourceName).font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Text("\(group.imageURLs.count) images").font(.caption).foregroundStyle(.secondary)
-                if queue.dragsBundles {
-                    Button(queue.package(for: group) == nil ? "Bundle" : "Rebuild") {
-                        queue.packageNow(group)
+                if queue.presentation(for: group) != nil || queue.presentationFailures[group.id] != nil {
+                    Button("Rebuild") {
+                        queue.buildPresentation(group)
                     }
                 }
                 Button("Open") { BinOpener.open(group.folderURL) }
@@ -307,19 +295,16 @@ struct ContentView: View {
     }
 
     private func cardDragIcon(for group: ConversionGroup) -> String {
-        guard queue.dragsBundles else { return "folder.fill" }
-        return queue.package(for: group) == nil ? "clock" : "shippingbox.fill"
+        guard queue.presentation(for: group) != nil else { return "clock" }
+        return "doc.text.fill"
     }
 
     private func cardDragCaption(for group: ConversionGroup) -> String {
-        guard queue.dragsBundles else {
-            return "Drag this card into ProPresenter"
+        if let failure = queue.presentationFailures[group.id] {
+            return "Could not write the presentation: \(failure)"
         }
-        if let failure = queue.packageFailures[group.id] {
-            return "Bundle failed: \(failure)"
-        }
-        return queue.package(for: group) == nil
-            ? "Building bundle\u{2026}"
+        return queue.presentation(for: group) == nil
+            ? "Building presentation\u{2026}"
             : "Drag this card to open it as a presentation"
     }
 

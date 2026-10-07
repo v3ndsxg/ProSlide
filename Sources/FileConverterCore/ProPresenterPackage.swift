@@ -3,41 +3,38 @@ import Foundation
 import ImageIO
 #endif
 
-/// Turns a converted deck's JPEGs into a ProPresenter bundle: one `.probundle`
+/// Turns a converted deck's JPEGs into a ProPresenter presentation: one `.pro`
 /// file that opens as a named presentation with every image already attached.
 ///
-/// A `.probundle` is a ZIP holding the `.pro` manifest plus the images it refers
-/// to, with the manifest pointing at them *relative to the bundle*. That
-/// self-containment is the whole point: the bundle can be moved, mailed, put on
-/// a stick, or dragged anywhere, and the images still resolve.
+/// The `.pro` is written into the deck's own folder, beside the JPEGs, and points
+/// at them by bare filename. That is what makes a single drag into ProPresenter
+/// bring in the whole deck, and it is also what keeps the manifest's media URLs
+/// resolvable: the deck folder is the resource the `.pro` is in.
 ///
-/// A bare `.pro` manifest is deliberately not produced. The format has no field
-/// for image data anywhere in its media path, so a `.pro` can only ever point at
-/// images already sitting at a fixed path on the machine that made it — useless
-/// to anyone it is sent to. Bundles are the only form worth writing.
+/// The trade-off is that this is not self-contained. Moving the `.pro` away from
+/// its JPEGs, or mailing it on its own, leaves ProPresenter pointing at images
+/// that are no longer there. Copy the whole folder, or use **Save…** to put the
+/// images somewhere durable.
 ///
-/// Bundles are written to `BinStorage.packagesDirectory`, not into the deck's
-/// own folder, so `scanBin` cannot mistake one for a deck and clearing the bin
-/// has a single obvious meaning.
+/// Presentations are written into each deck's folder rather than a shared one, so
+/// clearing the bin takes them with it and rescanning the bin ignores them (it
+/// only looks at `.jpg`).
 public enum ProPresenterPackage {
 
     /// The extension ProPresenter gives these.
-    public static let fileExtension = "probundle"
+    public static let fileExtension = "pro"
 
     // MARK: - Packaging
 
-    /// Packages `group` and returns the bundle written.
+    /// Writes the presentation for `group` and returns the file written.
     ///
     /// - Parameters:
     ///   - group: the converted deck to package.
-    ///   - destinationDirectory: where to write the bundle. Defaults to the
-    ///     bin's `Packages` folder.
     ///   - pixelSize: resolves an image's dimensions. Injectable so the writer
     ///     can be tested without decoding real images.
     @discardableResult
     public static func package(
         group: ConversionGroup,
-        destinationDirectory: URL = BinStorage.packagesDirectory,
         pixelSize: (URL) -> PixelSize?
     ) throws -> URL {
         let images = group.imageURLs
@@ -53,39 +50,29 @@ public enum ProPresenterPackage {
             return ProSlide(imageURL: url, pixelSize: size)
         }
 
-        let destination = destinationDirectory
+        let destination = group.folderURL
             .appendingPathComponent(name)
             .appendingPathExtension(fileExtension)
 
+        let manifest = ProPresenterDocument.encode(name: name, slides: slides)
         do {
-            let archive = try ZipArchiveWriter(to: destination)
-            try archive.addEntry(path: "\(name).pro", data: manifest(for: slides, name: name))
-            // Flat filenames at the ZIP root, which is what the manifest's
-            // ROOT_CURRENT_RESOURCE paths refer to. A nested `Media/Assets/`
-            // folder imports with nothing visible.
-            for slide in slides {
-                try archive.addFile(at: slide.imageURL, path: slide.imageURL.lastPathComponent)
-            }
-            try archive.close()
-        } catch let failure as ZipArchiveWriter.Failure {
-            throw ProPackageError.writeFailed(failure.errorDescription ?? "")
+            try manifest.write(to: destination, options: .atomic)
+        } catch {
+            throw ProPackageError.writeFailed("The file could not be saved.")
         }
         return destination
     }
 
     /// Convenience overload that reads each image's real pixel dimensions.
     @discardableResult
-    public static func package(
-        group: ConversionGroup,
-        destinationDirectory: URL = BinStorage.packagesDirectory
-    ) throws -> URL {
-        try package(group: group, destinationDirectory: destinationDirectory, pixelSize: pixelSize(ofImageAt:))
+    public static func package(group: ConversionGroup) throws -> URL {
+        try package(group: group, pixelSize: pixelSize(ofImageAt:))
     }
 
     // MARK: - Naming
 
-    /// The presentation's name, and the filename of the manifest inside the
-    /// bundle. A deck's folder is called `Name JPEGs`, so strip that suffix to
+    /// The presentation's name, and the filename of the `.pro`.
+    /// A deck's folder is called `Name JPEGs`, so strip that suffix to
     /// get back to the document's own name.
     static func presentationName(for group: ConversionGroup) -> String {
         let folder = group.sourceName
@@ -93,12 +80,6 @@ public enum ProPresenterPackage {
         guard folder.hasSuffix(suffix) else { return folder }
         let trimmed = String(folder.dropLast(suffix.count))
         return trimmed.isEmpty ? folder : trimmed
-    }
-
-    // MARK: - Manifest
-
-    private static func manifest(for slides: [ProSlide], name: String) -> Data {
-        ProPresenterDocument.encode(name: name, slides: slides)
     }
 
     // MARK: - Image dimensions

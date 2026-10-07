@@ -31,42 +31,21 @@ public final class ConversionQueue: ObservableObject {
     @Published public private(set) var isConverting = false
     @Published public var message: String?
 
-    /// Whether a card drag hands ProPresenter the document's JPEG folder, or a
-    /// single `.probundle` built from it.
-    ///
-    /// This is `nil`/false whenever bundles are off, and `cardDragItem` checks it
-    /// *before* the package cache. An earlier version consulted the cache first,
-    /// which meant that once a bundle had been built, JPEG-folder drags silently
-    /// handed over the bundle instead and the original workflow appeared broken.
-    @Published public var dragsBundles = false {
-        didSet {
-            guard dragsBundles != oldValue else { return }
-            if !dragsBundles {
-                packageTask?.cancel()
-                packages = [:]
-                packageFailures = [:]
-            } else {
-                rebuildPackages()
-            }
-        }
-    }
+    /// Built presentations, keyed by deck folder path. Populated in the
+    /// background so a card is never waiting on a disk write when it is dragged.
+    @Published public private(set) var presentations: [String: URL] = [:]
 
-    /// Built bundles, keyed by deck folder path. Populated in the background so
-    /// switching the toggle never makes the user wait.
-    @Published public private(set) var packages: [String: URL] = [:]
-
-    /// Decks whose bundle could not be built, keyed by deck folder path.
-    @Published public private(set) var packageFailures: [String: String] = [:]
+    /// Decks whose presentation could not be written, keyed by deck folder path.
+    @Published public private(set) var presentationFailures: [String: String] = [:]
 
     public var binRootURL: URL { BinStorage.rootURL }
-    public var binPackagesURL: URL { BinStorage.packagesDirectory }
 
     /// The single-file conversion injected by the initialiser. Deliberately
     /// not named `convert`: a stored property and a `convert()` method cannot
     /// share a name in one type.
     private let convertOne: ConvertOperation
     private var runTask: Task<Void, Never>?
-    private var packageTask: Task<Void, Never>?
+    private var presentationTask: Task<Void, Never>?
     private var temporaryProfile: URL?
 
     /// Which security scope was taken for each item, so it is released
@@ -268,7 +247,7 @@ public final class ConversionQueue: ObservableObject {
                 ConversionQueue.scanBin(at: root)
             }.value
             self?.groups = scanned
-            self?.rebuildPackages()
+            self?.rebuildPresentations()
         }
     }
 
@@ -282,36 +261,35 @@ public final class ConversionQueue: ObservableObject {
         }
     }
 
-    // MARK: - ProPresenter bundles
+    // MARK: - ProPresenter presentations
 
-    /// The bundle to drag for `group`, or nil when there isn't one yet.
-    public func package(for group: ConversionGroup) -> URL? {
-        packages[group.id]
+    /// The presentation to drag for `group`, or nil when there isn't one yet.
+    public func presentation(for group: ConversionGroup) -> URL? {
+        presentations[group.id]
     }
 
-    /// Builds one bundle now, ignoring the cache. The per-card button calls this
-    /// so a deck can be rebuilt after its JPEGs changed.
-    public func packageNow(_ group: ConversionGroup) {
+    /// Writes one presentation now, ignoring the cache. The per-card button calls
+    /// this so a deck can be rewritten after its JPEGs changed.
+    public func buildPresentation(_ group: ConversionGroup) {
         let result = Task.detached(priority: .userInitiated) {
             Result { try ProPresenterPackage.package(group: group) }
         }
         Task { [weak self] in
             guard let self else { return }
             switch await result.value {
-            case .success(let url): packages[group.id] = url
-            case .failure(let error): packageFailures[group.id] = Self.message(for: error)
+            case .success(let url): presentations[group.id] = url
+            case .failure(let error): presentationFailures[group.id] = Self.message(for: error)
             }
         }
     }
 
-    /// Builds a bundle for every deck that does not have a current one.
-    private func rebuildPackages() {
-        guard dragsBundles else { return }
-        let outstanding = groups.filter { packages[$0.id] == nil && packageFailures[$0.id] == nil }
+    /// Writes a presentation for every deck that does not have a current one.
+    private func rebuildPresentations() {
+        let outstanding = groups.filter { presentations[$0.id] == nil && presentationFailures[$0.id] == nil }
         guard !outstanding.isEmpty else { return }
-        // Replace any run still in flight: its results were for the old setting.
-        packageTask?.cancel()
-        packageTask = Task { [weak self] in
+        // Replace any run still in flight: its results were for an older bin.
+        presentationTask?.cancel()
+        presentationTask = Task { [weak self] in
             for group in outstanding {
                 if Task.isCancelled { return }
                 guard let self else { return }
@@ -319,8 +297,8 @@ public final class ConversionQueue: ObservableObject {
                     Result { try ProPresenterPackage.package(group: group) }
                 }.value
                 switch result {
-                case .success(let url): packages[group.id] = url
-                case .failure(let error): packageFailures[group.id] = Self.message(for: error)
+                case .success(let url): presentations[group.id] = url
+                case .failure(let error): presentationFailures[group.id] = Self.message(for: error)
                 }
             }
         }
@@ -341,19 +319,16 @@ public final class ConversionQueue: ObservableObject {
         }
     }
 
-    /// Empties the bin: every converted document, plus the ProPresenter bundles
-    /// built from them. Bundles live in their own folder rather than inside each
-    /// document's, so that folder has to go too or Clear would leave them behind.
+    /// Empties the bin: every converted document, plus the `.pro` written inside
+    /// each one. Presentations live in their own document's folder, so removing
+    /// the folder takes them with it.
     public func clearBin() throws {
-        packageTask?.cancel()
-        packages = [:]
-        packageFailures = [:]
+        presentationTask?.cancel()
+        presentations = [:]
+        presentationFailures = [:]
         for folder in groups.map(\.folderURL) {
             try FileManager.default.removeItem(at: folder)
         }
-        // `try?`: the folder may never have been created, and failing to clear a
-        // bin because of that would be worse than leaving it.
-        try? FileManager.default.removeItem(at: BinStorage.packagesDirectory)
         reloadBin()
     }
 }

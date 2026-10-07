@@ -23,18 +23,6 @@ public enum BinStorage {
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         return bin
     }
-
-    /// Where ProPresenter bundles are written.
-    ///
-    /// A folder of its own rather than a file inside each deck's folder, so that
-    /// `scanBin` cannot mistake a bundle for a deck and so that clearing the
-    /// bin has one obvious meaning. `scanBin` already skips it, because it
-    /// contains no JPEGs.
-    public static var packagesDirectory: URL {
-        let packages = rootURL.appendingPathComponent("Packages", isDirectory: true)
-        try? FileManager.default.createDirectory(at: packages, withIntermediateDirectories: true)
-        return packages
-    }
 }
 
 public struct ConversionOptions: Sendable {
@@ -143,7 +131,7 @@ public enum ProPackageError: LocalizedError, Equatable {
         switch self {
         case .noImages(let name): "\(name) has no JPEGs to package."
         case .unreadableImage(let name): "The size of \(name) could not be read."
-        case .writeFailed(let detail): "The ProPresenter bundle could not be written. \(detail)"
+        case .writeFailed(let detail): "The presentation could not be written. \(detail)"
         }
     }
 }

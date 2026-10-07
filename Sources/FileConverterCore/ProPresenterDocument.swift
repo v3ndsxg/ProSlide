@@ -1,19 +1,18 @@
 import Foundation
 
 /// Builds the `rv.data.Presentation` message that ProPresenter 7 and later
-/// expects to find in a `.pro` file, and that sits at the root of a
-/// `.probundle`.
+/// expects to find in a `.pro` file.
 ///
 /// A presentation is a flat list of *cues*, one per slide, plus *cue groups*
 /// that give the slide list its order in the UI. Each cue holds two actions:
 /// an empty slide canvas and a foreground media action pointing at the image.
 ///
-/// The field numbers and enum values below are not guesses. They were read out
-/// of a presentation ProPresenter wrote itself, and
-/// `ProPresenterPackageTests` re-reads a recording of that file to keep them
-/// honest. The schema is community-reverse-engineered and unsupported by Renewed
-/// Vision, so it is pinned deliberately: emit the smallest set that ProPresenter
-/// demonstrably reads, and change nothing without a new sample to check against.
+/// The field numbers and enum values below are not guesses. They were checked
+/// against the community-reverse-engineered `.proto` schema and are pinned
+/// against a recording of a real ProPresenter file in `ProPresenterPackageTests`.
+/// The schema is unsupported by Renewed Vision, so it is pinned deliberately:
+/// emit the smallest set that ProPresenter demonstrably reads, and change nothing
+/// without a new sample to check against.
 enum ProPresenterDocument {
 
     // MARK: - Schema constants
@@ -31,16 +30,19 @@ enum ProPresenterDocument {
 
     // rv.data.URL.LocalRelativePath.Root
     private enum Root {
-        /// Resolved by ProPresenter against the bundle being imported.
+        /// Resolved by ProPresenter against the resource the `.pro` itself sits
+        /// in. For a standalone `.pro` that is the folder holding it, which is
+        /// where `ProPresenterPackage` writes the deck's JPEGs.
         static let currentResource: UInt64 = 12
     }
 
     // rv.data.Media.Metadata
     private enum ColorFormat: UInt64 { case sdr = 1 }
 
-    /// ProPresenter's own bundles record the format in lowercase, so this
-    /// matches what it writes for a `.jpg`.
-    private static let jpegFormatIdentifier = "jpg"
+    /// ProPresenter records JPEG in uppercase in a standalone `.pro`, which is
+    /// what `Fixtures/reference.pro` shows. (Its own bundles record it
+    /// lowercase, so the two forms genuinely differ.)
+    private static let jpegFormatIdentifier = "JPG"
 
     /// Measured at roughly 700 bytes per slide, so this keeps a full 300-page deck
     /// to a single allocation.
@@ -52,8 +54,8 @@ enum ProPresenterDocument {
     /// order.
     ///
     /// Each slide's media is referenced by bare filename against
-    /// `ROOT_CURRENT_RESOURCE`, which is what makes the surrounding bundle
-    /// portable.
+    /// `ROOT_CURRENT_RESOURCE`, which ProPresenter resolves against the folder
+    /// containing the `.pro`.
     static func encode(name: String, slides: [ProSlide]) -> Data {
         var document = ProtoWriter(reservingCapacity: slides.count * estimatedSlideByteCount)
 
@@ -61,7 +63,8 @@ enum ProPresenterDocument {
             applicationInfo.uint(1, Platform.macOS.rawValue)
             applicationInfo.uint(3, Application.proPresenter.rawValue)
         }
-        document.message(2) { $0.string(1, newUUID()) }
+        let documentUUID = newUUID()
+        document.message(2) { $0.string(1, documentUUID) }
         document.string(3, name)
 
         // ProPresenter writes a transparent background here, leaving the colour
@@ -74,22 +77,41 @@ enum ProPresenterDocument {
             url.uint(3, Platform.macOS.rawValue)
         }
 
-        for slide in slides {
-            document.data(13, cue(for: slide))
+        // Cue identifiers are minted once, up front, and shared by the cue and
+        // the group that lists it. The group names its cues by identifier, so
+        // two independent sets of identifiers leave the group pointing at cues
+        // that do not exist and the deck has no readable order.
+        let cueUUIDs = slides.map { _ in newUUID() }
+        for (slide, cueUUID) in zip(slides, cueUUIDs) {
+            document.data(13, cue(for: slide, uuid: cueUUID))
         }
 
-        // One group holding every cue, in order: that is what gives the
-        // deck its sequence in ProPresenter's slide list.
-        document.data(12, cueGroup(for: slides.count))
+        // One group holding every cue, in order, wrapped in one arrangement that
+        // collects it. The arrangement is what `selected_arrangement` below
+        // points at, and between them they are what gives the deck its sequence
+        // and its name in ProPresenter's slide list. Without a selected
+        // arrangement ProPresenter has nothing to show.
+        let groupUUID = newUUID()
+        document.data(12, cueGroup(for: cueUUIDs, groupUUID: groupUUID))
+
+        let arrangementUUID = newUUID()
+        document.message(11) { arrangement in
+            arrangement.message(1) { $0.string(1, arrangementUUID) }
+            arrangement.string(2, name)
+            arrangement.message(3) { $0.string(1, groupUUID) }
+        }
+        document.message(10) { selectedArrangement in
+            selectedArrangement.string(1, arrangementUUID)
+        }
 
         return document.data
     }
 
     // MARK: - Cues
 
-    private static func cue(for slide: ProSlide) -> Data {
+    private static func cue(for slide: ProSlide, uuid: String) -> Data {
         var cue = ProtoWriter()
-        cue.message(1) { $0.string(1, newUUID()) }
+        cue.message(1) { $0.string(1, uuid) }
         cue.string(2, slide.label)
         cue.uint(5, CompletionActionType.last.rawValue)
         cue.message(8) { _ in }
@@ -164,16 +186,23 @@ enum ProPresenterDocument {
         return action.data
     }
 
-    /// Every slide in one group, which is what gives the deck its order in
-    /// ProPresenter's slide list.
-    private static func cueGroup(for slideCount: Int) -> Data {
+    /// Every slide in one group, in order, which is what gives the deck its
+    /// order in ProPresenter's slide list.
+    ///
+    /// The group needs a stable UUID of its own because the arrangement
+    /// references it by identifier; ProPresenter cannot resolve an arrangement
+    /// whose `group_identifiers` point at a UUID nothing else carries.
+    ///
+    /// `cueUUIDs` are the same identifiers the cues carry in their own field 1,
+    /// in the order the cues appear in the document.
+    private static func cueGroup(for cueUUIDs: [String], groupUUID: String) -> Data {
         var group = ProtoWriter()
         group.message(1) { inner in
-            inner.message(1) { groupUUID in groupUUID.string(1, newUUID()) }
+            inner.message(1) { identifier in identifier.string(1, groupUUID) }
             inner.message(4) { hotKey in _ = hotKey }
         }
-        for _ in 0..<slideCount {
-            group.message(2) { identifier in identifier.string(1, newUUID()) }
+        for cueUUID in cueUUIDs {
+            group.message(2) { identifier in identifier.string(1, cueUUID) }
         }
         return group.data
     }
@@ -187,16 +216,22 @@ enum ProPresenterDocument {
 
     /// Writes the URL for one slide's media.
     ///
-    /// A bundle stores its images as flat entries at the ZIP root, so the path is
-    /// just the filename and the root is `ROOT_CURRENT_RESOURCE`, which
-    /// ProPresenter resolves against the bundle itself.
+    /// The `.pro` is written into the same folder as the images it points at, so
+    /// both halves of the URL are the bare filename: `absolute_string` is the
+    /// percent-encoded form ProPresenter displays, and the `local` path names the
+    /// same file against `ROOT_CURRENT_RESOURCE`, which resolves against the
+    /// folder holding the `.pro`.
     ///
-    /// `ROOT_SHOW` is deliberately *not* used. It looks like the natural choice —
-    /// it is named "show", and one third-party encoder uses it — but it points at
-    /// ProPresenter's own library directory, not the bundle. A bundle written that
-    /// way imports with no images, which is exactly the bug this replaced.
+    /// Percent-encoding is not cosmetic. A deck called `Sermon Notes 2026` gives
+    /// an image `Sermon Notes 2026-001.jpg`, and an unescaped space in
+    /// `absolute_string` stops the URL resolving. `Fixtures/reference.pro`
+    /// records the encoded form — `Pictures/5ways%20to%20give.jpg`.
+    ///
+    /// `ROOT_SHOW` (10) is deliberately *not* used. It looks like the natural
+    /// choice — it is named "show", and one third-party encoder uses it — but it
+    /// points at ProPresenter's own library directory, not at the document.
     private static func writeURL(_ writer: inout ProtoWriter, filename: String) {
-        writer.string(1, filename)
+        writer.string(1, percentEncoded(filename))
         writer.uint(3, Platform.macOS.rawValue)
         writer.message(4) { local in
             local.uint(1, Root.currentResource)
@@ -210,14 +245,28 @@ enum ProPresenterDocument {
 
     /// Percent-encodes the characters that are not allowed unescaped in the
     /// path component of a URL.
+    ///
+    /// Anything outside the allowed set is escaped as its UTF-8 bytes, one
+    /// `%XX` per byte. Escaping a *character* would be wrong: a filename like
+    /// `Ünïcode.jpg` is two bytes per accented letter in UTF-8, and both have to
+    /// be written out or ProPresenter decodes something else entirely.
     static func percentEncoded(_ name: String) -> String {
         var allowed = Set<Character>()
         allowed.formUnion("abcdefghijklmnopqrstuvwxyz")
         allowed.formUnion("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
         allowed.formUnion("0123456789")
         allowed.formUnion("-._~!$&'()*+,;=:@/")
-        return name
-            .map { allowed.contains($0) ? String($0) : String(format: "%%%02X", $0.asciiValue ?? 0) }
-            .joined()
+
+        var encoded = ""
+        for character in name {
+            if allowed.contains(character) {
+                encoded.append(character)
+            } else {
+                for byte in String(character).utf8 {
+                    encoded += String(format: "%%%02X", byte)
+                }
+            }
+        }
+        return encoded
     }
 }
