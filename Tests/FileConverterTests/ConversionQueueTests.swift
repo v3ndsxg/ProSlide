@@ -91,17 +91,20 @@ final class ConversionQueueTests: XCTestCase {
 
     // MARK: - Progress
     func testAggregateProgressMath() {
-        typealias Fn = ConversionQueue.aggregateProgress
-        XCTAssertEqual(Fn(offset: 0, fraction: 0, total: 3), 0, accuracy: 0.0001)
-        XCTAssertEqual(Fn(offset: 0, fraction: 0.5, total: 3), 1.0 / 6.0, accuracy: 0.0001)
-        XCTAssertEqual(Fn(offset: 1, fraction: 0, total: 3), 1.0 / 3.0, accuracy: 0.0001)
-        XCTAssertEqual(Fn(offset: 2, fraction: 1, total: 3), 1.0, accuracy: 0.0001)
-        XCTAssertEqual(Fn(offset: 0, fraction: 0.5, total: 1), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(Fn(offset: 0, fraction: 0, total: 0), 0, accuracy: 0.0001)
+        // A bound function reference, not a typealias: `aggregateProgress` is a
+        // static method, and `typealias Fn = ConversionQueue.aggregateProgress`
+        // does not compile. Referring to it directly keeps the argument labels.
+        let progress = ConversionQueue.aggregateProgress
+        XCTAssertEqual(progress(offset: 0, fraction: 0, total: 3), 0, accuracy: 0.0001)
+        XCTAssertEqual(progress(offset: 0, fraction: 0.5, total: 3), 1.0 / 6.0, accuracy: 0.0001)
+        XCTAssertEqual(progress(offset: 1, fraction: 0, total: 3), 1.0 / 3.0, accuracy: 0.0001)
+        XCTAssertEqual(progress(offset: 2, fraction: 1, total: 3), 1.0, accuracy: 0.0001)
+        XCTAssertEqual(progress(offset: 0, fraction: 0.5, total: 1), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(progress(offset: 0, fraction: 0, total: 0), 0, accuracy: 0.0001)
         // A misbehaving converter reporting out-of-range fractions must not
         // push progress outside 0...1.
-        XCTAssertEqual(Fn(offset: 0, fraction: 5, total: 2), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(Fn(offset: 0, fraction: -3, total: 2), 0, accuracy: 0.0001)
+        XCTAssertEqual(progress(offset: 0, fraction: 5, total: 2), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(progress(offset: 0, fraction: -3, total: 2), 0, accuracy: 0.0001)
     }
 
     func testProgressFinishesAtOneAndConverterProgressIsForwarded() async throws {

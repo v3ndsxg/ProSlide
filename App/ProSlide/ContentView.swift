@@ -217,7 +217,7 @@ struct ContentView: View {
 
     private var binHint: String {
         var hint = "Each card is a .pro presentation written beside its JPEGs. Keep the folder together when you move it: the .pro points at the images next to it."
-        if queue.groups.contains { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil } {
+        if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
             hint += " They are written in the background, so a card still being written drags its JPEG folder instead."
         }
         return hint

@@ -55,6 +55,12 @@ jobs:
           du -sh "$APP"
 
       - name: Test
+        # `shell: bash` implies -eo pipefail. Without it the pipeline's exit
+        # status is tee's (always 0), so a test target that fails to compile
+        # still reports success — which is how a broken ConversionQueueTests
+        # typealias went unnoticed for many commits. Never pipe swift test into
+        # tee again without this.
+        shell: bash
         env:
           FILE_CONVERTER_ARTIFACTS: ${{ runner.temp }}/test-artifacts
         run: swift test 2>&1 | tee test-output.txt

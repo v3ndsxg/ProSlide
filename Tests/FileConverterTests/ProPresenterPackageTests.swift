@@ -483,9 +483,10 @@ final class ProPresenterPackageTests: XCTestCase {
                 FileManager.default.fileExists(atPath: folder.appendingPathComponent(filename).path),
                 "\(filename) does not exist on disk"
             )
+            let display = try XCTUnwrap(url.string(1))
             XCTAssertFalse(
-                try XCTUnwrap(url.string(1)).contains(" "),
-                "absolute_string must be percent-encoded: \(try XCTUnwrap(url.string(1)))"
+                display.contains(" "),
+                "absolute_string must be percent-encoded: \(display)"
             )
         }
     }
