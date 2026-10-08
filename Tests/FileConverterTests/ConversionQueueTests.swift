@@ -91,20 +91,45 @@ final class ConversionQueueTests: XCTestCase {
 
     // MARK: - Progress
     func testAggregateProgressMath() {
-        // A bound function reference, not a typealias: `aggregateProgress` is a
-        // static method, and `typealias Fn = ConversionQueue.aggregateProgress`
-        // does not compile. Referring to it directly keeps the argument labels.
-        let progress = ConversionQueue.aggregateProgress
-        XCTAssertEqual(progress(offset: 0, fraction: 0, total: 3), 0, accuracy: 0.0001)
-        XCTAssertEqual(progress(offset: 0, fraction: 0.5, total: 3), 1.0 / 6.0, accuracy: 0.0001)
-        XCTAssertEqual(progress(offset: 1, fraction: 0, total: 3), 1.0 / 3.0, accuracy: 0.0001)
-        XCTAssertEqual(progress(offset: 2, fraction: 1, total: 3), 1.0, accuracy: 0.0001)
-        XCTAssertEqual(progress(offset: 0, fraction: 0.5, total: 1), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(progress(offset: 0, fraction: 0, total: 0), 0, accuracy: 0.0001)
+        // Each call names the method outright rather than binding it to a local
+        // first: Swift erases argument labels when a function is referenced as a
+        // value, so `let progress = ConversionQueue.aggregateProgress` yields a
+        // bare `(Int, Double, Int) -> Double` and `progress(offset:...)` will not
+        // compile. A typealias loses them the same way.
+        XCTAssertEqual(
+            ConversionQueue.aggregateProgress(offset: 0, fraction: 0, total: 3),
+            0, accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            ConversionQueue.aggregateProgress(offset: 0, fraction: 0.5, total: 3),
+            1.0 / 6.0, accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            ConversionQueue.aggregateProgress(offset: 1, fraction: 0, total: 3),
+            1.0 / 3.0, accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            ConversionQueue.aggregateProgress(offset: 2, fraction: 1, total: 3),
+            1.0, accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            ConversionQueue.aggregateProgress(offset: 0, fraction: 0.5, total: 1),
+            0.5, accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            ConversionQueue.aggregateProgress(offset: 0, fraction: 0, total: 0),
+            0, accuracy: 0.0001
+        )
         // A misbehaving converter reporting out-of-range fractions must not
         // push progress outside 0...1.
-        XCTAssertEqual(progress(offset: 0, fraction: 5, total: 2), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(progress(offset: 0, fraction: -3, total: 2), 0, accuracy: 0.0001)
+        XCTAssertEqual(
+            ConversionQueue.aggregateProgress(offset: 0, fraction: 5, total: 2),
+            0.5, accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            ConversionQueue.aggregateProgress(offset: 0, fraction: -3, total: 2),
+            0, accuracy: 0.0001
+        )
     }
 
     func testProgressFinishesAtOneAndConverterProgressIsForwarded() async throws {
