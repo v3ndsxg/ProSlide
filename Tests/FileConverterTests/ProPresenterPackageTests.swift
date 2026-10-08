@@ -498,15 +498,15 @@ final class ProPresenterPackageTests: XCTestCase {
             )
         }
 
-        // The paths really are the deck's images, not something that merely
-        // happens to exist.
-        XCTAssertEqual(Set(paths), Set(deck.group.imageURLs.map(\.lastPathComponent)))
-        for path in paths {
-            XCTAssertTrue(
-                path.hasSuffix(deck.folder.lastPathComponent),
-                "\(path) should live inside the deck folder"
-            )
-        }
+        // The paths really are the deck's own images, expressed relative to home —
+// not merely names that happen to resolve to something. Compared against the
+// same helper production uses, so this pins the contract exactly: a manifest
+// naming some other file that happened to exist would still fail.
+        let expected = Set(deck.group.imageURLs.compactMap {
+            ProPresenterDocument.homeRelativePath(of: $0, home: home)
+        })
+        XCTAssertEqual(expected.count, 3, "the test deck's images must be under the home folder")
+        XCTAssertEqual(Set(paths), expected, "the manifest must name exactly the deck's images")
 
         // And the images are left exactly as they were: the packager must not
         // copy or move them, or the deck's own files would go stale.
