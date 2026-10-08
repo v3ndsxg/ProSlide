@@ -327,8 +327,8 @@ final class ProPresenterPackageTests: XCTestCase {
 
         let metadata = try XCTUnwrap(element.message(3))
         XCTAssertEqual(
-            metadata.string(5), "jpg",
-            "ProPresenter records the format in lowercase"
+            metadata.string(5), "JPG",
+            "a standalone .pro records JPEG in uppercase, matching reference.pro"
         )
     }
 

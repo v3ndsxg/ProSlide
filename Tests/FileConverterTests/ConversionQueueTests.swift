@@ -298,12 +298,21 @@ final class ConversionQueueTests: XCTestCase {
             return recordedProgress
         }
 
+        /// Appends to `recordedProgress`. Deliberately not `async`: taking an
+        /// `NSLock` straight from an async function is what produces the
+        /// "unavailable from asynchronous contexts" warnings these helpers
+        /// otherwise attract, so the locking lives here instead.
+        private func recordProgress(_ value: Double) {
+            lock.lock(); defer { lock.unlock() }
+            recordedProgress.append(value)
+        }
+
         func run(_ url: URL, report: (Double) -> Void) async throws -> URL {
             lock.lock()
             recordedInputs.append(url.lastPathComponent)
             lock.unlock()
 
-            for value in reports { report(value) }
+            for value in reports { recordProgress(value); report(value) }
 
             if let gate {
                 await gate.enterAndWait()
