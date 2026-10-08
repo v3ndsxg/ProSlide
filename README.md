@@ -78,9 +78,7 @@ CI runs all three suites on a macOS runner on every push, and packages the app w
 1. **Add your file or files.** Drag PDFs and `.pptx` files onto the panel, or click it to pick them. You can add more at any time.
 2. **Check the resolution.** Leave it at Full HD unless you have a reason; that is the right choice for most ProPresenter services.
 3. **Press Convert** (or ⌘↩). One at a time they run, and the panel shows what each file is doing. If a file fails, the rest still convert and the failure tells you why.
-4. **Wait for the Bin** to fill in on the right. Each document gets its own `Document Name JPEGs` folder under `~/Documents/ProSlide/Bin`, and the bin remembers everything you have converted, so it is still there next time you open the app. Documents are listed alphabetically. **Open Folder** shows you where they are.
-
-> **Upgrading note.** Output used to live in `~/Library/Application Support/FileConverter`. It now lives in `~/Documents/ProSlide`. Nothing is migrated: decks converted by an earlier version stay where they are, so move those folders across by hand or re-convert them.
+4. **Wait for the Bin** to fill in on the right. Each document gets its own `Document Name JPEGs` folder, and the bin remembers everything you have converted, so it is still there next time you open the app. Documents are listed alphabetically.
 5. **Drag the card into ProPresenter.** That is the whole job. Every slide in that document arrives, in order, named `Document-001.jpg`, `Document-002.jpg`, and so on.
 
 Each document also gets a `Name.pro` in the bin's `Pro` folder, so dragging its card into ProPresenter brings the deck in as a single named presentation with every slide attached. A control at the top of the bin switches between that and the plain JPEG folder — see [Presentations](#presentations).

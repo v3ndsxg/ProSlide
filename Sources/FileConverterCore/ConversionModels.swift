@@ -37,29 +37,10 @@ public enum DragMode: String, CaseIterable, Identifiable, Sendable {
 }
 
 public enum BinStorage {
-    /// Where converted documents are written.
-    ///
-    /// Under **Documents**, not Application Support, and that is deliberate.
-    ///
-    /// Media in a `.pro` is named by a path relative to the home folder, which
-    /// ProPresenter then reads *without* a drag-granted permission for it. Pointing
-    /// those paths inside `~/Library/Application Support/…` looked like it should
-    /// work and did not: the presentation imported with a placeholder on every
-    /// slide, for both URL roots tried. The likeliest reason is that the path sits
-    /// in another app's container, where ProPresenter has no ambient read access.
-    /// A bundle never hit this because its images travelled inside the archive and
-    /// needed no path access at all.
-    ///
-    /// Documents is also where a person would look for their slides, so this is the
-    /// better home regardless.
-    ///
-    /// Note this does not migrate anything: decks already converted under the old
-    /// Application Support path stay there and must be moved or re-converted by
-    /// hand.
     public static var rootURL: URL {
-        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("ProSlide", isDirectory: true)
-        let bin = documents.appendingPathComponent("Bin", isDirectory: true)
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("FileConverter", isDirectory: true)
+        let bin = base.appendingPathComponent("Bin", isDirectory: true)
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         return bin
     }
