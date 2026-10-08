@@ -31,6 +31,14 @@ public final class ConversionQueue: ObservableObject {
     @Published public private(set) var isConverting = false
     @Published public var message: String?
 
+    /// Which of the two card-drag payloads the bin offers.
+    ///
+    /// Deliberately not a toggle that controls writing: presentations are always
+    /// written to every deck, because the `.pro` is a few hundred bytes of
+    /// manifest and there is nothing to save by deferring it. Switching modes is
+    /// therefore instant and cannot leave a stale file behind.
+    @Published public var dragMode: DragMode = .presentation
+
     /// Built presentations, keyed by deck folder path. Populated in the
     /// background so a card is never waiting on a disk write when it is dragged.
     @Published public private(set) var presentations: [String: URL] = [:]
@@ -262,6 +270,19 @@ public final class ConversionQueue: ObservableObject {
     }
 
     // MARK: - ProPresenter presentations
+
+    /// What a card drag hands over, given the mode. Falls back to the JPEG
+    /// folder when the presentation is not written yet, so a drag is never a
+    /// no-op — including for a deck whose presentation failed to write, which is
+    /// why this ignores the reason for its absence.
+    public func dragPayload(for group: ConversionGroup) -> URL {
+        switch dragMode {
+        case .jpegFolder:
+            return group.folderURL
+        case .presentation:
+            return presentation(for: group) ?? group.folderURL
+        }
+    }
 
     /// The presentation to drag for `group`, or nil when there isn't one yet.
     public func presentation(for group: ConversionGroup) -> URL? {

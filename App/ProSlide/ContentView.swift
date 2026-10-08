@@ -199,6 +199,13 @@ struct ContentView: View {
                 Button("Open Folder") { BinOpener.open(queue.binRootURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
             }
+            Picker("Card drag", selection: $queue.dragMode) {
+                ForEach(DragMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
             Text(binHint).font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -216,35 +223,32 @@ struct ContentView: View {
     }
 
     private var binHint: String {
-        var hint = "Each card is a .pro presentation written beside its JPEGs. Keep the folder together when you move it: the .pro points at the images next to it."
-        if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
-            hint += " They are written in the background, so a card still being written drags its JPEG folder instead."
+        switch queue.dragMode {
+        case .jpegFolder:
+            var hint = "Each card drags its JPEG folder, so ProPresenter brings in every slide at once."
+            if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
+                hint += " Presentations are being written in the background."
+            }
+            return hint
+        case .presentation:
+            var hint = "Each card drags the deck's .pro, which opens as one named presentation with every slide attached. It points at the images in your Library folder, so it resolves on this Mac only."
+            if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
+                hint += " They are written in the background, so a card still being written drags its JPEG folder instead."
+            }
+            return hint
         }
-        return hint
     }
 
     /// The payload for dragging a whole document into ProPresenter.
     ///
-    /// That is the deck's `.pro` presentation, which ProPresenter imports as one
-    /// named presentation with every slide attached. Before it has been written,
-    /// the card falls back to the document's `Name JPEGs` folder, which
-    /// ProPresenter imports as a plain sequence — a drag is never a no-op.
-    ///
-    /// The fallback deliberately ignores *why* the presentation is missing. A card
-    /// whose write failed would otherwise have nothing to drag at all, and the
-    /// folder is always there.
-    ///
-    /// This carries a single file rather than the individual image URLs. A
-    /// SwiftUI drag can only ever hand over a single `NSItemProvider`, so packing
-    /// many URLs into one item does not arrive as many files — a receiver takes
-    /// the first and you get one slide. Finder gets this right by writing one
-    /// pasteboard item per file, which needs an AppKit drag session.
+    /// One file or one folder, never a pile of loose images. A SwiftUI drag can
+    /// only ever hand over a single `NSItemProvider`, so packing many URLs into
+    /// one item does not arrive as many files — a receiver takes the first and
+    /// you get one slide. Finder gets this right by writing one pasteboard item
+    /// per file, which needs an AppKit drag session.
     private func cardDragItem(for group: ConversionGroup) -> NSItemProvider {
-        if let presentation = queue.presentation(for: group) {
-            return NSItemProvider(contentsOf: presentation) ?? NSItemProvider(object: presentation as NSURL)
-        }
-        return NSItemProvider(contentsOf: group.folderURL)
-            ?? NSItemProvider(object: group.folderURL as NSURL)
+        let payload = queue.dragPayload(for: group)
+        return NSItemProvider(contentsOf: payload) ?? NSItemProvider(object: payload as NSURL)
     }
 
     private func binGroup(_ group: ConversionGroup) -> some View {
@@ -295,17 +299,24 @@ struct ContentView: View {
     }
 
     private func cardDragIcon(for group: ConversionGroup) -> String {
-        guard queue.presentation(for: group) != nil else { return "clock" }
-        return "doc.text.fill"
+        switch queue.dragMode {
+        case .jpegFolder: return "folder.fill"
+        case .presentation: return queue.presentation(for: group) == nil ? "clock" : "doc.text.fill"
+        }
     }
 
     private func cardDragCaption(for group: ConversionGroup) -> String {
-        if let failure = queue.presentationFailures[group.id] {
-            return "Could not write the presentation: \(failure)"
+        switch queue.dragMode {
+        case .jpegFolder:
+            return "Drag this card into ProPresenter"
+        case .presentation:
+            if let failure = queue.presentationFailures[group.id] {
+                return "Could not write the presentation: \(failure)"
+            }
+            return queue.presentation(for: group) == nil
+                ? "Building presentation\u{2026}"
+                : "Drag this card to open it as a presentation"
         }
-        return queue.presentation(for: group) == nil
-            ? "Building presentation\u{2026}"
-            : "Drag this card to open it as a presentation"
     }
 
     // MARK: - Drop

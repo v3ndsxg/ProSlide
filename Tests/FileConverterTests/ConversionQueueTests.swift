@@ -145,6 +145,32 @@ final class ConversionQueueTests: XCTestCase {
         XCTAssertEqual(queue.progress, 1.0, accuracy: 0.0001)
     }
 
+    // MARK: - Drag modes
+
+    /// The bin offers both a JPEG-folder drag and a `.pro` drag. `.pro` is the
+    /// default because it is the reason the deck is packaged at all, but the
+    /// folder has to stay reachable — it is what you want when pulling slides
+    /// into a presentation you already have.
+    func testDragModeDefaultsToThePresentationAndCanSwitchToTheFolder() {
+        let queue = ConversionQueue()
+        XCTAssertEqual(queue.dragMode, .presentation)
+
+        let group = ConversionGroup(
+            sourceName: "Deck JPEGs",
+            folderURL: URL(fileURLWithPath: "/tmp/Deck JPEGs", isDirectory: true)
+        )
+
+        // With nothing written yet, both modes fall back to the folder so a drag
+        // is never a no-op.
+        XCTAssertEqual(queue.dragPayload(for: group), group.folderURL)
+
+        queue.dragMode = .jpegFolder
+        XCTAssertEqual(queue.dragPayload(for: group), group.folderURL)
+
+        queue.dragMode = .presentation
+        XCTAssertEqual(queue.dragPayload(for: group), group.folderURL)
+    }
+
     // MARK: - Cancellation
 
     func testCancelStopsTheBatchAndLeavesNothingCommitted() async throws {

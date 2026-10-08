@@ -30,9 +30,21 @@ enum ProPresenterDocument {
 
     // rv.data.URL.LocalRelativePath.Root
     private enum Root {
-        /// Resolved by ProPresenter against the resource the `.pro` itself sits
-        /// in. For a standalone `.pro` that is the folder holding it, which is
-        /// where `ProPresenterPackage` writes the deck's JPEGs.
+        /// ProPresenter resolves this against the user's home folder, so the
+        /// path is written relative to `~/`.
+        ///
+        /// This is what ProPresenter itself writes into a standalone `.pro` —
+        /// `Fixtures/reference.pro` records `root: 2` with `Pictures/deck-001.jpg`
+        /// — and it is the only root we have evidence for. It also means the
+        /// file only resolves on this machine, for this account.
+        static let userHome: UInt64 = 2
+
+        /// Resolved against the resource being imported, which for
+        /// `ROOT_CURRENT_RESOURCE` means the bundle's own archive root.
+        ///
+        /// Correct for a `.probundle`, and wrong for a standalone `.pro`: with no
+        /// bundle there is no resource to resolve against, so every slide
+        /// imports as a placeholder. That is what this used to use.
         static let currentResource: UInt64 = 12
     }
 
@@ -53,10 +65,15 @@ enum ProPresenterDocument {
     /// Serialises the manifest for a presentation named `name` holding `slides`, in
     /// order.
     ///
-    /// Each slide's media is referenced by bare filename against
-    /// `ROOT_CURRENT_RESOURCE`, which ProPresenter resolves against the folder
-    /// containing the `.pro`.
-    static func encode(name: String, slides: [ProSlide]) -> Data {
+    /// Each slide's media is named by a path relative to `homeDirectory`, which
+    /// ProPresenter resolves against the user's home folder. Injectable so the
+    /// tests can assert exact paths instead of depending on the account running
+    /// them.
+    static func encode(
+        name: String,
+        slides: [ProSlide],
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> Data {
         var document = ProtoWriter(reservingCapacity: slides.count * estimatedSlideByteCount)
 
         document.message(1) { applicationInfo in
@@ -83,7 +100,7 @@ enum ProPresenterDocument {
         // that do not exist and the deck has no readable order.
         let cueUUIDs = slides.map { _ in newUUID() }
         for (slide, cueUUID) in zip(slides, cueUUIDs) {
-            document.data(13, cue(for: slide, uuid: cueUUID))
+            document.data(13, cue(for: slide, uuid: cueUUID, homeDirectory: homeDirectory))
         }
 
         // One group holding every cue, in order, wrapped in one arrangement that
@@ -109,14 +126,14 @@ enum ProPresenterDocument {
 
     // MARK: - Cues
 
-    private static func cue(for slide: ProSlide, uuid: String) -> Data {
+    private static func cue(for slide: ProSlide, uuid: String, homeDirectory: URL) -> Data {
         var cue = ProtoWriter()
         cue.message(1) { $0.string(1, uuid) }
         cue.string(2, slide.label)
         cue.uint(5, CompletionActionType.last.rawValue)
         cue.message(8) { _ in }
         cue.data(10, canvasAction(for: slide))
-        cue.data(10, mediaAction(for: slide))
+        cue.data(10, mediaAction(for: slide, homeDirectory: homeDirectory))
         cue.bool(12, true)
         return cue.data
     }
@@ -144,15 +161,18 @@ enum ProPresenterDocument {
         return action.data
     }
 
-    private static func mediaAction(for slide: ProSlide) -> Data {
+    private static func mediaAction(for slide: ProSlide, homeDirectory: URL) -> Data {
         var action = ProtoWriter()
         action.message(1) { uuid in uuid.string(1, newUUID()) }
         action.bool(6, true)
         action.uint(9, ActionType.media.rawValue)
+        // Resolved once so the element URL and the image file's localUrl cannot
+        // disagree; ProPresenter reads both and they have to name the same file.
+        let location = mediaLocation(for: slide, homeDirectory: homeDirectory)
         action.message(20) { media in
             media.message(5) { element in
                 element.message(1) { uuid in uuid.string(1, newUUID()) }
-                element.message(2) { url in writeURL(&url, filename: slide.imageURL.lastPathComponent) }
+                element.message(2) { url in location.write(to: &url) }
                 element.message(3) { metadata in
                     metadata.string(5, jpegFormatIdentifier)
                     metadata.uint(6, ColorFormat.sdr.rawValue)
@@ -176,7 +196,7 @@ enum ProPresenterDocument {
                         drawing.bool(16, true)
                     }
                     type.message(2) { file in
-                        file.message(1) { localURL in writeURL(&localURL, filename: slide.imageURL.lastPathComponent) }
+                        file.message(1) { localURL in location.write(to: &localURL) }
                     }
                 }
             }
@@ -184,6 +204,47 @@ enum ProPresenterDocument {
             media.uint(10, LayerType.foreground.rawValue)
         }
         return action.data
+    }
+
+    /// Where ProPresenter should look for one slide's image: a path and the
+    /// root that path is relative to.
+    private struct MediaLocation {
+        let path: String
+        let root: UInt64
+
+        func write(to writer: inout ProtoWriter) {
+            writer.string(1, ProPresenterDocument.percentEncoded(path))
+            writer.uint(3, Platform.macOS.rawValue)
+            writer.message(4) { local in
+                local.uint(1, root)
+                local.string(2, path)
+            }
+        }
+    }
+
+    /// The home-relative path for `slide`'s image, under the user's home folder.
+    ///
+    /// An image outside the home folder cannot be expressed that way, so it falls
+    /// back to the root relative to the document itself. The app never gets
+    /// there — decks are always written into the bin under `~/` — but a `.pro`
+    /// built from an arbitrary folder should still say something coherent.
+    private static func mediaLocation(for slide: ProSlide, homeDirectory: URL) -> MediaLocation {
+        if let relative = homeRelativePath(of: slide.imageURL, home: homeDirectory) {
+            return MediaLocation(path: relative, root: Root.userHome)
+        }
+        return MediaLocation(path: slide.imageURL.lastPathComponent, root: Root.currentResource)
+    }
+
+    /// `url` relative to `home`, or nil when it does not lie inside `home`.
+    ///
+    /// Both sides are standardized first, so a symlinked or non-normalised home
+    /// path still matches, and the leading `/` is dropped so the result is
+    /// relative in the same way ProPresenter's own files are.
+    static func homeRelativePath(of url: URL, home: URL) -> String? {
+        let rootPath = home.standardizedFileURL.path
+        let filePath = url.standardizedFileURL.path
+        guard filePath.hasPrefix(rootPath + "/") else { return nil }
+        return String(filePath.dropFirst(rootPath.count + 1))
     }
 
     /// Every slide in one group, in order, which is what gives the deck its
@@ -214,37 +275,17 @@ enum ProPresenterDocument {
         writer.double(2, Double(pixels.height))
     }
 
-    /// Writes the URL for one slide's media.
-    ///
-    /// The `.pro` is written into the same folder as the images it points at, so
-    /// both halves of the URL are the bare filename: `absolute_string` is the
-    /// percent-encoded form ProPresenter displays, and the `local` path names the
-    /// same file against `ROOT_CURRENT_RESOURCE`, which resolves against the
-    /// folder holding the `.pro`.
-    ///
-    /// Percent-encoding is not cosmetic. A deck called `Sermon Notes 2026` gives
-    /// an image `Sermon Notes 2026-001.jpg`, and an unescaped space in
-    /// `absolute_string` stops the URL resolving. `Fixtures/reference.pro`
-    /// records the encoded form — `Pictures/5ways%20to%20give.jpg`.
-    ///
-    /// `ROOT_SHOW` (10) is deliberately *not* used. It looks like the natural
-    /// choice — it is named "show", and one third-party encoder uses it — but it
-    /// points at ProPresenter's own library directory, not at the document.
-    private static func writeURL(_ writer: inout ProtoWriter, filename: String) {
-        writer.string(1, percentEncoded(filename))
-        writer.uint(3, Platform.macOS.rawValue)
-        writer.message(4) { local in
-            local.uint(1, Root.currentResource)
-            local.string(2, filename)
-        }
-    }
-
     private static func newUUID() -> String {
         UUID().uuidString.uppercased()
     }
 
     /// Percent-encodes the characters that are not allowed unescaped in the
     /// path component of a URL.
+    ///
+    /// Not cosmetic: a deck called `Sermon Notes 2026` produces images with
+    /// spaces in their names, and an unescaped space in `absolute_string` stops
+    /// the URL resolving. `Fixtures/reference.pro` records the encoded form —
+    /// `Pictures/5ways%20to%20give.jpg`.
     ///
     /// Anything outside the allowed set is escaped as its UTF-8 bytes, one
     /// `%XX` per byte. Escaping a *character* would be wrong: a filename like

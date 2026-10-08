@@ -15,6 +15,27 @@ public enum ResolutionPreset: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// What dragging a document card in the bin hands over to ProPresenter.
+public enum DragMode: String, CaseIterable, Identifiable, Sendable {
+    /// The deck's `Name JPEGs` folder. ProPresenter imports it as a plain
+    /// sequence, which is what you want when pulling slides into a presentation
+    /// you already have.
+    case jpegFolder
+
+    /// The deck's `.pro`. ProPresenter opens it as one named presentation with
+    /// every slide already attached.
+    case presentation
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .jpegFolder: "JPEG Folder"
+        case .presentation: ".pro Presentation"
+        }
+    }
+}
+
 public enum BinStorage {
     public static var rootURL: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!

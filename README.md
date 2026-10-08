@@ -69,7 +69,7 @@ swift test
 
 `ConversionQueueTests` drives the batch queue through an injected converter, so it needs neither a window nor LibreOffice. It covers name-ordered sequencing, per-file error isolation, re-queuing a failure on the next run, security-scope balance, aggregate progress arithmetic, cancellation, unsupported-file reporting, and bin scanning.
 
-`ProPresenterPackageTests` covers the `.pro` path with no window, no LibreOffice and no real JPEG decoding — pixel sizes are injected. It decodes the generated manifest with an independent protobuf reader (`ProtoReader.swift`), so a mistake shared between a writer and its decoder cannot pass unnoticed, and it checks that every path the manifest names is really sitting beside the `.pro`. `reference.pro` in `Fixtures/` is a real ProPresenter-written presentation with its paths and identifiers replaced; it is the ground truth for the field numbers the writer emits.
+`ProPresenterPackageTests` covers the `.pro` path with no window, no LibreOffice and no real JPEG decoding — pixel sizes are injected. It decodes the generated manifest with an independent protobuf reader (`ProtoReader.swift`), so a mistake shared between a writer and its decoder cannot pass unnoticed, and it checks that every path the manifest names really resolves to a file under the home folder. `reference.pro` in `Fixtures/` is a real ProPresenter-written presentation with its paths and identifiers replaced; it is the ground truth for the field numbers the writer emits.
 
 CI runs all three suites on a macOS runner on every push, and packages the app with the same script the install instructions use.
 
@@ -81,7 +81,7 @@ CI runs all three suites on a macOS runner on every push, and packages the app w
 4. **Wait for the Bin** to fill in on the right. Each document gets its own `Document Name JPEGs` folder, and the bin remembers everything you have converted, so it is still there next time you open the app. Documents are listed alphabetically.
 5. **Drag the card into ProPresenter.** That is the whole job. Every slide in that document arrives, in order, named `Document-001.jpg`, `Document-002.jpg`, and so on.
 
-Each document also gets a `Name.pro` written beside its JPEGs, so dragging its card into ProPresenter brings the deck in as a single named presentation with every slide attached — see [Presentations](#presentations).
+Each document also gets a `Name.pro` written beside its JPEGs, so dragging its card into ProPresenter brings the deck in as a single named presentation with every slide attached. A control at the top of the bin switches between that and the plain JPEG folder — see [Presentations](#presentations).
 
 If you need a slide that is not the whole document, drag its individual thumbnail instead of the card. And if you want the images somewhere other than ProPresenter, **Save…** copies a document's set to any folder you choose.
 
@@ -96,13 +96,18 @@ Two details worth knowing: converting the same file again creates a second folde
 A card drag carries **one** thing, never a pile of loose files. That is deliberate. A SwiftUI drag hands over a single `NSItemProvider`, so a list of URLs packed into one item does not arrive as many files — the receiving app takes the first and you get one slide. Finder avoids this by writing one pasteboard item per file, which requires an AppKit drag session. A card therefore hands over the deck's `.pro` (which is why that one file references every image), falling back to the document's JPEG folder before one has been written. If a deck ever needs only a middle range of slides, the bin has no control for that; the thumbnail drag is the only way to cherry-pick, one image at a time.
 
 ## Presentations
-Each document in the bin gets a `Name.pro` written next to its JPEGs, and dragging that card into ProPresenter brings the deck in as **one named presentation with every slide attached** — no selection step, no trip to Finder.
+The control at the top of the bin chooses what a card drag hands over:
 
-The `.pro` and its images reference each other by bare filename, so **keep the folder together**. Move or copy the whole `Name JPEGs` folder and it still works; take the `.pro` on its own and ProPresenter opens it with every slide missing. For images to live somewhere else, **Save…** copies the set to a folder you choose.
+- **JPEG Folder** — the document's `Name JPEGs` folder. ProPresenter imports it as a plain sequence, which is what you want when pulling slides into a presentation you already have.
+- **.pro Presentation** — a single `Name.pro` written next to the deck's JPEGs, which ProPresenter opens as **one named presentation with every slide attached**.
+
+Every document gets its `.pro` written regardless of the setting, so switching is instant and a card whose presentation is still being written falls back to its JPEG folder rather than doing nothing. **Save…** copies a document's JPEGs to a folder you choose.
+
+The `.pro` is **tied to your account on this Mac**. It names its images by a path relative to your home folder, which is the only form ProPresenter is known to resolve for a standalone `.pro`. There is no portable single-file `.pro` — the format has nowhere to put image data — so a `.pro` copied to another machine, or to another account, opens with placeholders instead of pictures. That is what the JPEG Folder option is for.
 
 If you would rather pull slides into a presentation you already have, drag an individual thumbnail instead — one image at a time.
 
-Presentations are written into each document's own folder, so **Clear** removes them along with everything else. Each card shows whether its `.pro` is ready; **Rebuild** rewrites one after its JPEGs changed. Writing happens in the background, so a card that isn't ready yet still drags its JPEG folder rather than doing nothing.
+Presentations are written into each document's own folder, so **Clear** removes them along with everything else. Each card shows whether its `.pro` is ready, and **Rebuild** rewrites one after its JPEGs changed.
 
 One deliberate omission: generated slides carry no playback duration, so a slide holds until you click rather than advancing on a timer. ProPresenter's own announcement exports set ten seconds, which is right for announcements and wrong for a sermon deck.
 
@@ -111,7 +116,7 @@ ProPresenter 7 and later store presentations as Google Protocol Buffers messages
 
 A presentation is a flat list of *cues*, one per slide, collected into a cue group and selected through an arrangement. Details that decide whether a deck opens with images or without, each of which was wrong at least once:
 
-- Media must use URL root **`ROOT_CURRENT_RESOURCE`** (12), which ProPresenter resolves against the folder containing the `.pro`. `ROOT_SHOW` (10) looks like the natural choice and is what at least one third-party encoder uses, but it points at ProPresenter's own library directory.
+- Media must use URL root **`ROOT_USER_HOME`** (2), with the path written relative to the home folder. This is what ProPresenter itself writes into a standalone `.pro`, and `Fixtures/reference.pro` records it. `ROOT_CURRENT_RESOURCE` (12) is the natural-sounding choice and was used here first: it resolves against the *bundle* being imported, so a standalone `.pro` — which has no bundle — imports with a placeholder on every slide. `ROOT_SHOW` (10) points at ProPresenter's own library directory instead.
 - `absolute_string` must be **percent-encoded**. A deck called `Sermon Notes 2026` has images with spaces in their names, and an unescaped space stops the URL resolving. `Fixtures/reference.pro` records the encoded form.
 - Cue groups must name the cues they contain **by the cues' own identifiers**. Minting a group's identifiers independently leaves it pointing at cues that do not exist, and ProPresenter has no readable order to show.
 - A document needs an arrangement and a `selected_arrangement` pointing at it, or there is nothing for ProPresenter to display.
