@@ -69,7 +69,7 @@ final class ProPresenterPackageTests: XCTestCase {
         XCTAssertEqual(cues.count, 41)
 
         // One action per cue, and every one a presentation slide.
-        var actionTypes: Set<UInt64?> = []
+        var actionTypes: Set<UInt64> = []
         for cue in cues {
             let actions = try cue.messages(10)
             XCTAssertEqual(actions.count, 1, "a cue carries exactly one action")
@@ -81,15 +81,18 @@ final class ProPresenterPackageTests: XCTestCase {
         )
 
         // The image hangs off the slide at 10.23.2.1.1.1.9.3.
-        let first = try XCTUnwrap(actions(of: cues[0])[0])
+        let first = actions(of: cues[0])[0]
         let element = try XCTUnwrap(mediaElement(of: first))
         XCTAssertEqual(
-            Set([f.number for f in element]), [1, 2, 3, 5],
+            element.map(\.number).sorted(), [1, 2, 3, 5],
             "uuid, url, metadata and element type"
         )
 
         let url = try XCTUnwrap(element.message(2))
-        XCTAssertEqual(Set([f.number for f in url]), [1, 3, 4], "absolute string, platform, local path")
+        XCTAssertEqual(
+            url.map(\.number).sorted(), [1, 3, 4],
+            "absolute string, platform, local path"
+        )
         XCTAssertEqual(
             try XCTUnwrap(url.string(1)),
             "file:///Users/techuser/Documents/ProPresenter/Media/Imported/"
@@ -114,7 +117,7 @@ final class ProPresenterPackageTests: XCTestCase {
 
         let drawing = try XCTUnwrap(try XCTUnwrap(element.message(5)).message(1))
         XCTAssertEqual(
-            Set([f.number for f in drawing]), [5, 7, 14, 15],
+            drawing.map(\.number).sorted(), [5, 7, 14, 15],
             "natural size, bounds, crop, alpha — and no field 16, which we used to write"
         )
         XCTAssertEqual(drawing.uint(15), 1, "alpha_type: straight")
@@ -193,11 +196,11 @@ final class ProPresenterPackageTests: XCTestCase {
         let realURL = try urlIn(realActions[0])
 
         XCTAssertEqual(
-            Set([f.number for f in ourURL]), Set([f.number for f in realURL]),
+            ourURL.map(\.number).sorted(), realURL.map(\.number).sorted(),
             "the URL message carries the same fields as the recording"
         )
-        XCTAssertEqual(try ourURL.uint(3), 1, "platform: macOS")
-        XCTAssertEqual(try realURL.uint(3), 1)
+        XCTAssertEqual(ourURL.uint(3), 1, "platform: macOS")
+        XCTAssertEqual(realURL.uint(3), 1)
     }
 
     func testGeneratedManifestKeepsSlideOrderAndSizes() throws {
@@ -502,10 +505,10 @@ final class ProPresenterPackageTests: XCTestCase {
             )
         }
 
-        // The paths really are the deck's own images, expressed relative to home —
-// not merely names that happen to resolve to something. Compared against the
-// same helper production uses, so this pins the contract exactly: a manifest
-// naming some other file that happened to exist would still fail.
+        // The paths really are the deck's own images, expressed relative to
+        // ProPresenter's root — not merely names that happen to resolve to
+        // something. Compared against the same helper production uses, so this
+        // pins the contract exactly.
         let expected = Set(deck.group.imageURLs.compactMap {
             ProPresenterDocument.relativePath(of: $0, from: showRoot)
         })
@@ -546,18 +549,15 @@ final class ProPresenterPackageTests: XCTestCase {
         XCTAssertEqual(presentation.deletingLastPathComponent(), out)
 
         let manifest = try ProtoReader.fields(of: try Data(contentsOf: presentation))
-        let showRoot = try XCTUnwrap(
-            ProPresenterPackage.showRootUsedByLastPackage(),
-            "the test must know which root the manifest was built against"
-        )
         var seen: [String] = []
         for cue in try manifest.messages(13) {
-            let actions = try XCTUnwrap(cue.messages(10))
-            let element = try XCTUnwrap(try XCTUnwrap(actions[1].message(20)).message(5))
+            let actions = try cue.messages(10)
+            let element = try XCTUnwrap(mediaElement(of: actions[0]))
             let url = try XCTUnwrap(element.message(2))
             let path = try XCTUnwrap(try XCTUnwrap(url.message(4)).string(2))
 
-            // The path is home-relative, so it ends in the image's filename.
+            // The path is relative to ProPresenter's root, so it ends in the
+            // image's filename.
             let filename = (path as NSString).lastPathComponent
             XCTAssertTrue(awkward.contains(filename), "unexpected filename \(filename)")
             seen.append(filename)
