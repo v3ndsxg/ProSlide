@@ -69,7 +69,7 @@ swift test
 
 `ConversionQueueTests` drives the batch queue through an injected converter, so it needs neither a window nor LibreOffice. It covers name-ordered sequencing, per-file error isolation, re-queuing a failure on the next run, security-scope balance, aggregate progress arithmetic, cancellation, unsupported-file reporting, and bin scanning.
 
-`ProPresenterPackageTests` covers the `.pro` path with no window, no LibreOffice and no real JPEG decoding — pixel sizes are injected. It decodes the generated manifest with an independent protobuf reader (`ProtoReader.swift`), so a mistake shared between a writer and its decoder cannot pass unnoticed, and it checks that every path the manifest names really resolves to a file under the home folder. `reference.pro` in `Fixtures/` is a real ProPresenter-written presentation with its paths and identifiers replaced; it is the ground truth for the field numbers the writer emits.
+`ProPresenterPackageTests` covers the `.pro` path with no window, no LibreOffice and no real JPEG decoding — pixel sizes are injected. It decodes the generated manifest with an independent protobuf reader (`ProtoReader.swift`), so a mistake shared between a writer and its decoder cannot pass unnoticed, and it checks that every path the manifest names really resolves to a file under ProPresenter's document root. `real.pro` in `Fixtures/` is a presentation ProPresenter exported itself, images and all; it is the ground truth for how media is referenced.
 
 CI runs all three suites on a macOS runner on every push, and packages the app with the same script the install instructions use.
 
@@ -103,7 +103,7 @@ The control at the top of the bin chooses what a card drag hands over:
 
 Every document gets its `.pro` written regardless of the setting, so switching is instant and a card whose presentation is still being written falls back to its JPEG folder rather than doing nothing. **Save…** copies a document's JPEGs to a folder you choose.
 
-The `.pro` is **tied to your account on this Mac**. It names its images by a path relative to your home folder, which is the only form ProPresenter is known to resolve for a standalone `.pro`. There is no portable single-file `.pro` — the format has nowhere to put image data — so a `.pro` copied to another machine, or to another account, opens with placeholders instead of pictures. That is what the JPEG Folder option is for.
+The `.pro` is **tied to this Mac and this account**. It names its images by a path relative to *ProPresenter's* document root, so it only resolves where that installation is — and only while the images stay where ProSlide put them. There is no portable single-file `.pro`: the format has nowhere to put image data, which is exactly why the `.probundle` existed. Copying a `.pro` to another machine, another account, or a different ProPresenter location gives placeholders instead of pictures. **JPEG Folder** is the portable option.
 
 If you would rather pull slides into a presentation you already have, drag an individual thumbnail instead — one image at a time.
 
@@ -114,14 +114,20 @@ One deliberate omission: generated slides carry no playback duration, so a slide
 ### About the `.pro` format
 ProPresenter 7 and later store presentations as Google Protocol Buffers messages rather than the XML that version 6 used. The schema is community-reverse-engineered and is **not** created, endorsed or supported by Renewed Vision. ProSlide writes it directly — `ProtobufWriter.swift` is a small wire-format writer and `ProPresenterDocument.swift` describes the handful of messages a deck of still images needs — so there is no `protoc` step and no new dependency.
 
-A presentation is a flat list of *cues*, one per slide, collected into a cue group and selected through an arrangement. Details that decide whether a deck opens with images or without, each of which was wrong at least once:
+`Tests/FileConverterTests/Fixtures/real.pro` is a presentation ProPresenter exported itself, images and all. It is the ground truth for everything below.
 
-- Media must use URL root **`ROOT_USER_HOME`** (2), with the path written relative to the home folder. This is what ProPresenter itself writes into a standalone `.pro`, and `Fixtures/reference.pro` records it. `ROOT_CURRENT_RESOURCE` (12) is the natural-sounding choice and was used here first: it resolves against the *bundle* being imported, so a standalone `.pro` — which has no bundle — imports with a placeholder on every slide. `ROOT_SHOW` (10) points at ProPresenter's own library directory instead.
-- `absolute_string` must be **percent-encoded**. A deck called `Sermon Notes 2026` has images with spaces in their names, and an unescaped space stops the URL resolving. `Fixtures/reference.pro` records the encoded form.
-- Cue groups must name the cues they contain **by the cues' own identifiers**. Minting a group's identifiers independently leaves it pointing at cues that do not exist, and ProPresenter has no readable order to show.
-- A document needs an arrangement and a `selected_arrangement` pointing at it, or there is nothing for ProPresenter to display.
+A presentation is a flat list of *cues*, one per slide, collected into a single cue group. The details that decide whether a deck opens with images or with placeholders, each of which was wrong at least once:
 
-`ProPresenterPackageTests` pins all of these. Field numbers were checked against the published `.proto` schema, and `Tests/FileConverterTests/Fixtures/reference.pro` is a recording of a presentation ProPresenter wrote itself with its paths and identifiers replaced; the tests check the generated manifest against it field by field. That fixture records no arrangement, so the arrangement field numbers come from the schema rather than from it. If a future ProPresenter version stops reading these files, that fixture is where you start. Always keep a backup of anything you have already made, and test on a copy.
+- **A cue holds exactly one action, and it is a presentation slide.** The image is an element *inside* that slide, at `10.23.2.1.1.1.9.3.2`. Real presentations contain **no media actions at all** — the export has 41 cues and 41 presentation-slide actions. An earlier version of this writer emitted a blank canvas plus a separate `ACTION_TYPE_MEDIA`, which produced valid protobuf but nothing ProPresenter could read.
+- **Media uses URL root `ROOT_SHOW` (10)**, resolved against ProPresenter's own document root. All 82 media URLs in `real.pro` use it.
+- **The path is relative to that root** — `Media/Imported/…` — and `absolute_string` is the full `file://` URL. Because the bin and ProPresenter's root share a parent, ProSlide's paths start with `..` to climb back out to the images, which avoids copying every slide into ProPresenter's tree. Nothing in the schema forbids `..`; if a future version normalises and rejects them, the fallback is to write the images into ProPresenter's `Media/Imported` folder instead.
+- **`metadata.format` is uppercase** (`JPG`).
+- **Cue groups must name the cues they contain by the cues' own identifiers.** Minting a group's identifiers independently leaves it pointing at cues that do not exist. Note the group lists cues in slide-list order, which need not match their order in the file.
+- **No arrangements.** There is no `arrangements` or `selected_arrangement` field here, because `real.pro` records neither. They were an earlier guess, and wrong.
+
+ProPresenter's document root is discovered rather than assumed: `PathSettings.proPaths` if it exists, otherwise `~/Documents/ProPresenter`. If you have moved your installation in ProPresenter's preferences and it does not use that settings file, the media paths will point at the wrong place.
+
+`ProPresenterPackageTests` pins all of the above. Always keep a backup of anything you have already made, and test on a copy.
 
 ## Conversion behavior
 - PDF: PDFKit/Core Graphics renders each page directly to JPEG.

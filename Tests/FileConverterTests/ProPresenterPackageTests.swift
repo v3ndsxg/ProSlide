@@ -50,192 +50,201 @@ final class ProPresenterPackageTests: XCTestCase {
         )
     }
 
-    // MARK: - The reference presentation
+    // MARK: - The real presentation
 
-    /// Reads `reference.pro`, a recording of a presentation ProPresenter wrote
-    /// itself with every path and identifier replaced. It is the ground truth
-    /// for every field number and enum value in `ProPresenterDocument`.
-    func testReferenceFixtureHasTheDocumentedShape() throws {
-        let presentation = try ProtoReader.fields(of: referenceFixture())
+    /// `real.pro` is a presentation ProPresenter exported itself, complete with
+    /// images. It is the only trustworthy ground truth for media: the older
+    /// `reference.pro` fixture was hand-edited, its UUIDs replaced with
+    /// sequential placeholders and its paths overwritten with `deck-NNN.jpg`, and
+    /// in eight of thirteen cues its two URL fields disagree with each other. No
+    /// real file does that. Nothing about how ProPresenter names media could be
+    /// learned from it, and several wrong conclusions here came from trying.
+    func testRealFixtureHasTheShapeTheWriterMustMatch() throws {
+        let presentation = try ProtoReader.fields(of: realFixture())
 
-        XCTAssertEqual(presentation.string(3), "7PM Youth Announcements")
-        XCTAssertEqual(presentation.all(13).count, 13, "thirteen cues")
-        XCTAssertEqual(presentation.all(12).count, 8, "eight cue groups")
+        XCTAssertEqual(presentation.all(11).count, 0, "no arrangements")
+        XCTAssertEqual(presentation.all(10).count, 0, "no selected arrangement")
+        XCTAssertEqual(presentation.all(12).count, 1, "one cue group")
+        let cues = try presentation.messages(13)
+        XCTAssertEqual(cues.count, 41)
 
-        // ApplicationInfo: Mac, ProPresenter.
-        let info = try XCTUnwrap(presentation.message(1))
-        XCTAssertEqual(info.uint(1), 1)
-        XCTAssertEqual(info.uint(3), 1)
-
-        // Background is a transparent colour; chord chart is Mac.
-        let background = try XCTUnwrap(presentation.message(8))
-        let colour = try XCTUnwrap(background.message(1))
-        XCTAssertEqual(colour.float(4), 1)
-        XCTAssertEqual(try presentation.message(9)?.uint(3), 1)
-
-        // A real ProPresenter file records no arrangement, so this fixture cannot
-        // teach us the field numbers. They come from the published `.proto`
-        // schema instead, and `testGeneratedManifestDeclaresOneSelectedArrangement`
-        // pins that we emit them.
-        XCTAssertEqual(presentation.all(11).count, 0, "the recording has no arrangements")
-        XCTAssertEqual(presentation.all(10).count, 0, "and no selected arrangement")
-
-        // First cue: a name, one canvas action, one media action.
-        let cue = try XCTUnwrap(presentation.message(13))
-        XCTAssertEqual(cue.string(2), "deck-001.jpg")
-        XCTAssertEqual(cue.uint(5), 1, "completion_action_type: last")
-        XCTAssertTrue(cue.bool(12), "cues are enabled")
-
-        let actions = try cue.messages(10)
-        XCTAssertEqual(actions.count, 2)
-        XCTAssertEqual(actions[0].uint(9), 11, "first action is a presentation slide")
-        XCTAssertEqual(actions[1].uint(9), 2, "second action is media")
-
-        // The canvas action sizes itself to the image.
-        let slideType = try XCTUnwrap(actions[0].message(23))
-        let presentationSlide = try XCTUnwrap(slideType.message(2))
-        let baseSlide = try XCTUnwrap(presentationSlide.message(1))
-        let size = try XCTUnwrap(baseSlide.message(6))
-        XCTAssertEqual(size.double(1), 1920)
-        XCTAssertEqual(size.double(2), 1080)
-
-        // The media action: a foreground layer pointing at one JPEG.
-        let media = try XCTUnwrap(actions[1].message(20))
-        XCTAssertEqual(media.uint(10), 1, "layer_type: foreground")
-        let element = try XCTUnwrap(media.message(5))
-        let url = try XCTUnwrap(element.message(2))
-        XCTAssertEqual(url.uint(3), 1, "platform: macOS")
-
-        // ProPresenter's own standalone files point into the home folder (root 2)
-        // and percent-encode the display string: `Pictures/5ways%20to%20give.jpg`.
-        // We use root 12 instead, resolved against the `.pro`'s own folder, so the
-        // encoding has to survive the same way.
-        let local = try XCTUnwrap(url.message(4))
-        XCTAssertEqual(local.uint(1), 2, "root: user home")
-        XCTAssertEqual(local.string(2), "Pictures/deck-001.jpg")
+        // One action per cue, and every one a presentation slide.
+        var actionTypes: Set<UInt64?> = []
+        for cue in cues {
+            let actions = try cue.messages(10)
+            XCTAssertEqual(actions.count, 1, "a cue carries exactly one action")
+            actionTypes.insert(try XCTUnwrap(actions.first?.uint(9)))
+        }
         XCTAssertEqual(
-            url.string(1), "Pictures/5ways%20to%20give.jpg",
-            "absolute_string is percent-encoded, not a file:// URL"
+            actionTypes, [11],
+            "all presentation slides, and no media actions anywhere in the file"
+        )
+
+        // The image hangs off the slide at 10.23.2.1.1.1.9.3.
+        let first = try XCTUnwrap(actions(of: cues[0])[0])
+        let element = try XCTUnwrap(mediaElement(of: first))
+        XCTAssertEqual(
+            Set([f.number for f in element]), [1, 2, 3, 5],
+            "uuid, url, metadata and element type"
+        )
+
+        let url = try XCTUnwrap(element.message(2))
+        XCTAssertEqual(Set([f.number for f in url]), [1, 3, 4], "absolute string, platform, local path")
+        XCTAssertEqual(
+            try XCTUnwrap(url.string(1)),
+            "file:///Users/techuser/Documents/ProPresenter/Media/Imported/"
+                + "D7A11B7C-D837-4F34-AD63-547229289B4C/5B9CC38B-2BFB-41AD-AB63-D2719F37F2DE/Slide19.jpg",
+            "a full file:// URL, not a percent-encoded fragment"
+        )
+
+        let local = try XCTUnwrap(url.message(4))
+        XCTAssertEqual(
+            try XCTUnwrap(local.uint(1)), 10,
+            "ROOT_SHOW: resolved against ProPresenter's own document root"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(local.string(2)),
+            "Media/Imported/D7A11B7C-D837-4F34-AD63-547229289B4C/"
+                + "5B9CC38B-2BFB-41AD-AB63-D2719F37F2DE/Slide19.jpg"
         )
 
         let metadata = try XCTUnwrap(element.message(3))
-        XCTAssertEqual(metadata.string(5), "JPG", "standalone .pro records JPEG in uppercase")
-        XCTAssertEqual(metadata.uint(6), 1, "colour format: SDR")
+        XCTAssertEqual(metadata.string(5), "JPG", "uppercase")
+        XCTAssertEqual(metadata.uint(6), 1, "SDR")
 
-        let image = try XCTUnwrap(element.message(5))
-        let drawing = try XCTUnwrap(image.message(1))
-        let natural = try XCTUnwrap(drawing.message(5))
-        XCTAssertEqual(natural.double(1), 1920)
-        XCTAssertEqual(natural.double(2), 1080)
+        let drawing = try XCTUnwrap(try XCTUnwrap(element.message(5)).message(1))
+        XCTAssertEqual(
+            Set([f.number for f in drawing]), [5, 7, 14, 15],
+            "natural size, bounds, crop, alpha — and no field 16, which we used to write"
+        )
         XCTAssertEqual(drawing.uint(15), 1, "alpha_type: straight")
-        XCTAssertTrue(drawing.bool(16))
     }
 
-    /// Every cue group lists the deck's cues in order, which is what gives the
-    /// presentation its sequence in ProPresenter.
-    ///
-    /// This checks the recording's own bookkeeping: that each group names as many
-    /// cues as the deck has. It is also the model for the writer's behaviour,
-    /// since a group whose identifiers do not match the cues leaves ProPresenter
-    /// with an unreadable order.
-    func testReferenceCueGroupsAccountForEveryCue() throws {
-        let presentation = try ProtoReader.fields(of: referenceFixture())
-        let groups = try presentation.messages(12)
-        var listed: [[ProtoReader.Field]] = []
-        for group in groups { listed += try group.messages(2) }
-        XCTAssertEqual(listed.count, presentation.all(13).count)
-    }
+    /// The cue group lists the same cues, but in the slide-list order rather than
+    /// the order they appear in the file. Worth knowing before anyone "fixes" it
+    /// to match document order.
+    func testRealCueGroupListsEveryCueInItsOwnOrder() throws {
+        let presentation = try ProtoReader.fields(of: realFixture())
+        let cues = try presentation.messages(13)
+        let listed = try presentation.messages(12)[0].messages(2)
 
-    /// The recording's cue identifiers must actually be the cues' own, which is
-    /// the invariant `ProPresenterDocument` has to preserve when it mints its own.
-    func testReferenceCueGroupIdentifiersMatchTheCuesTheyName() throws {
-        let presentation = try ProtoReader.fields(of: referenceFixture())
-
-        var cueUUIDs: Set<String> = []
-        for cue in try presentation.messages(13) {
-            let uuid = try XCTUnwrap(try cue.message(1)?.string(1))
-            cueUUIDs.insert(uuid)
-        }
-
-        let groups = try presentation.messages(12)
-        var listed: [String] = []
-        for group in groups {
-            for identifier in try group.messages(2) {
-                listed.append(try XCTUnwrap(identifier.string(1)))
-            }
-        }
-        XCTAssertEqual(Set(listed), cueUUIDs, "a cue group must name cues that exist")
+        let cueIDs = Set(cues.compactMap { try? $0.message(1)?.string(1) })
+        XCTAssertEqual(
+            Set(listed.compactMap { $0.string(1) }), cueIDs,
+            "the group names every cue exactly once"
+        )
     }
 
     // MARK: - The generated manifest
 
-    func testGeneratedManifestMatchesTheReferenceCueShape() throws {
+    /// The generated document must have the same *shape* as one ProPresenter wrote
+    /// itself: one action per cue, of the slide kind, carrying the image.
+    ///
+    /// The structural facts this pins are the ones that were wrong for a long time
+    /// and that no field-by-field diff had caught, because they only show up when
+    /// compared against a real export:
+    ///
+    /// - exactly one action per cue, and it is a presentation slide — a real
+    ///   presentation contains **no** media actions, so the image has to hang off
+    ///   the slide rather than sit beside it.
+    /// - the image is reachable at `10.23.2.1.1.1.9.3.2`.
+    func testGeneratedManifestMatchesTheRealCueShape() throws {
         let slide = ProSlide(
-            imageURL: URL(fileURLWithPath: "/Users/someone/Pictures/deck-001.jpg"),
+            imageURL: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/deck-001.jpg"),
             pixelSize: PixelSize(width: 1920, height: 1080)
         )
-        let generated = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Deck", slides: [slide], homeDirectory: fixtureHome))
-        let reference = try ProtoReader.fields(of: referenceFixture())
-
-        // Compare the first cue of each, ignoring the fields we deliberately do
-        // not write (see ProPresenterDocument) and the ones that are just
-        // identifiers.
-        let ours = try XCTUnwrap(generated.message(13))
-        let theirs = try XCTUnwrap(reference.message(13))
-
-        // Field 1 is the cue's own UUID and field 8 an empty hot key; field 10 is
-        // the action list, compared element by element below because our two
-        // actions differ in field count from ProPresenter's.
-        // Field 1 is the URL's absolute string wherever it turns up, and it is expected
-        // to differ: the recording resolves against the home folder, ours against
-        // the .pro's own folder. testMediaIsReferencedTheWayProPresenterResolvesIt
-        // pins our value.
-        assertSameShape(
-            ours, theirs, ignoring: [1, 8, 10], ignoreAnywhere: [1], context: "cue"
+        let generated = try ProtoReader.fields(
+            of: ProPresenterDocument.encode(name: "Deck", slides: [slide], showRoot: fixtureShow)
         )
+        let real = try ProtoReader.fields(of: realFixture())
 
-        let ourActions = try ours.messages(10)
-        let theirActions = try theirs.messages(10)
-        XCTAssertEqual(ourActions.count, theirActions.count)
-        for (index, pair) in zip(ourActions, theirActions).enumerated() {
-            // Field 8 on a media action is a playback duration. ProPresenter
-            // writes one; we omit it so slides hold until clicked.
-            assertSameShape(
-                pair.0, pair.1,
-                ignoring: index == 1 ? [8] : [],
-                ignoreAnywhere: [1],
-                context: "action \(index)"
-            )
+        let ourCue = try XCTUnwrap(generated.message(13))
+        let realCue = try XCTUnwrap(real.message(13))
+
+        let ourActions = try ourCue.messages(10)
+        let realActions = try realCue.messages(10)
+
+        XCTAssertEqual(
+            ourActions.count, 1,
+            "a cue holds exactly one action; real presentations have no media actions at all"
+        )
+        XCTAssertEqual(realActions.count, 1, "the recording agrees")
+
+        XCTAssertEqual(
+            try XCTUnwrap(ourActions.first?.uint(9)), 11,
+            "ACTION_TYPE_PRESENTATION_SLIDE"
+        )
+        XCTAssertEqual(try XCTUnwrap(realActions.first?.uint(9)), 11)
+
+        // Both reach the media at the same nesting depth. Nothing here is a
+        // coincidence of the fixture: it is the only path a real file uses.
+        func urlIn(_ action: [ProtoReader.Field]) throws -> [ProtoReader.Field] {
+            let slideType = try XCTUnwrap(action.message(23))
+            let presentationSlide = try XCTUnwrap(slideType.message(2))
+            let baseSlide = try XCTUnwrap(presentationSlide.message(1))
+            let element = try XCTUnwrap(baseSlide.message(1))
+            let graphics = try XCTUnwrap(element.message(1))
+            let mediaHolder = try XCTUnwrap(graphics.message(9))
+            let mediaElement = try XCTUnwrap(mediaHolder.message(3))
+            return try XCTUnwrap(mediaElement.message(2))
         }
+
+        let ourURL = try urlIn(ourActions[0])
+        let realURL = try urlIn(realActions[0])
+
+        XCTAssertEqual(
+            Set([f.number for f in ourURL]), Set([f.number for f in realURL]),
+            "the URL message carries the same fields as the recording"
+        )
+        XCTAssertEqual(try ourURL.uint(3), 1, "platform: macOS")
+        XCTAssertEqual(try realURL.uint(3), 1)
     }
 
     func testGeneratedManifestKeepsSlideOrderAndSizes() throws {
         let slides = (1...3).map { index in
             ProSlide(
-                imageURL: URL(fileURLWithPath: "/Users/someone/Pictures/deck-00\(index).jpg"),
+                imageURL: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/deck-00\(index).jpg"),
                 pixelSize: PixelSize(width: 1920, height: 1080),
                 label: "Slide \(index)"
             )
         }
-        let presentation = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Deck", slides: slides, homeDirectory: fixtureHome))
+        let presentation = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Deck", slides: slides, showRoot: fixtureShow))
 
         XCTAssertEqual(presentation.string(3), "Deck")
         let cues = try presentation.messages(13)
-        XCTAssertEqual(cues.compactMap { $0.string(2) }, ["Slide 1", "Slide 2", "Slide 3"])
         XCTAssertEqual(presentation.all(12).count, 1, "one group holding the deck in order")
 
         for (index, cue) in cues.enumerated() {
             let actions = try XCTUnwrap(cue.messages(10))
-            let element = try XCTUnwrap(try XCTUnwrap(actions[1].message(20)).message(5))
-            let drawing = try XCTUnwrap(try XCTUnwrap(element.message(5)).message(1))
-            let natural = try XCTUnwrap(drawing.message(5))
+            XCTAssertEqual(actions.count, 1, "one action per cue")
+
+            let mediaElement = try XCTUnwrap(mediaElement(of: actions[0]))
+            let natural = try XCTUnwrap(
+                try XCTUnwrap(try XCTUnwrap(mediaElement.message(5)).message(1)).message(5)
+            )
             XCTAssertEqual(natural.double(1), 1920)
             XCTAssertEqual(natural.double(2), 1080)
 
             // Each cue must point at its own image.
-            let local = try XCTUnwrap(try XCTUnwrap(element.message(2)).message(4))
-            XCTAssertEqual(local.string(2), "Pictures/deck-00\(index + 1).jpg")
+            let local = try XCTUnwrap(try XCTUnwrap(mediaElement.message(2)).message(4))
+            XCTAssertEqual(local.string(2), "Media/deck-00\(index + 1).jpg")
         }
+    }
+
+    /// A cue's action list.
+    private func actions(of cue: [ProtoReader.Field]) throws -> [[ProtoReader.Field]] {
+        try cue.messages(10)
+    }
+
+    /// Walks `10.23.2.1.1.1.9.3` to the media element inside a slide action.
+    private func mediaElement(of action: [ProtoReader.Field]) throws -> [ProtoReader.Field]? {
+        let slideType = try XCTUnwrap(action.message(23))
+        let presentationSlide = try XCTUnwrap(slideType.message(2))
+        let baseSlide = try XCTUnwrap(presentationSlide.message(1))
+        let element = try XCTUnwrap(baseSlide.message(1))
+        let graphics = try XCTUnwrap(element.message(1))
+        let mediaHolder = try XCTUnwrap(graphics.message(9))
+        return try XCTUnwrap(mediaHolder.message(3))
     }
 
     /// Every cue group's identifiers must be the cues' own, in order. A group
@@ -245,11 +254,11 @@ final class ProPresenterPackageTests: XCTestCase {
     func testGeneratedCueGroupNamesTheCuesItHolds() throws {
         let slides = (1...3).map { index in
             ProSlide(
-                imageURL: URL(fileURLWithPath: "/Users/someone/Pictures/deck-00\(index).jpg"),
+                imageURL: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/deck-00\(index).jpg"),
                 pixelSize: PixelSize(width: 1920, height: 1080)
             )
         }
-        let presentation = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Deck", slides: slides, homeDirectory: fixtureHome))
+        let presentation = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Deck", slides: slides, showRoot: fixtureShow))
 
         let cueUUIDs = try presentation.messages(13).map { try XCTUnwrap($0.message(1)?.string(1)) }
         XCTAssertEqual(cueUUIDs.count, 3, "identifiers are distinct, not shared")
@@ -260,186 +269,138 @@ final class ProPresenterPackageTests: XCTestCase {
         XCTAssertEqual(listed, cueUUIDs, "the group must list the cues in document order")
     }
 
-    /// An arrangement names the groups it shows, and `selected_arrangement` says
-    /// which one is on screen. Without both, a deck can open with nothing in it.
+    /// A flat deck has no arrangements at all.
     ///
-    /// The recording has neither, so these field numbers come from the published
-    /// `.proto` schema rather than from `reference.pro`.
-    func testGeneratedManifestDeclaresOneSelectedArrangement() throws {
+    /// I added arrangements and `selected_arrangement` on an earlier inference,
+    /// and they were wrong: `Fixtures/real.pro`, exported by ProPresenter itself,
+    /// records neither. Emitting fields a real file never contains is the kind of
+    /// invention that makes a manifest unreadable, so this pins their absence.
+    func testGeneratedManifestDeclaresNoArrangements() throws {
         let slides = (1...2).map { index in
             ProSlide(
-                imageURL: URL(fileURLWithPath: "/Users/someone/Pictures/deck-00\(index).jpg"),
+                imageURL: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/deck-00\(index).jpg"),
                 pixelSize: PixelSize(width: 1920, height: 1080)
             )
         }
-        let presentation = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Deck", slides: slides, homeDirectory: fixtureHome))
-
-        let groupUUID = try XCTUnwrap(
-            try XCTUnwrap(presentation.messages(12).first).message(1)?.message(1)?.string(1)
+        let generated = try ProtoReader.fields(
+            of: ProPresenterDocument.encode(name: "Deck", slides: slides, showRoot: fixtureShow)
         )
+        let real = try ProtoReader.fields(of: realFixture())
 
-        XCTAssertEqual(presentation.all(11).count, 1, "one arrangement")
-        let arrangement = try XCTUnwrap(presentation.message(11))
-        XCTAssertEqual(arrangement.string(2), "Deck")
-        let arrangementUUID = try XCTUnwrap(arrangement.message(1)?.string(1))
-        XCTAssertEqual(
-            try arrangement.messages(3).map { try XCTUnwrap($0.string(1)) }, [groupUUID],
-            "the arrangement must name the group, or ProPresenter cannot resolve it"
-        )
+        XCTAssertEqual(generated.all(11).count, 0, "no arrangements, matching the recording")
+        XCTAssertEqual(generated.all(10).count, 0, "and no selected arrangement")
+        XCTAssertEqual(real.all(11).count, 0)
+        XCTAssertEqual(real.all(10).count, 0)
 
-        XCTAssertEqual(
-            try presentation.message(10)?.string(1), arrangementUUID,
-            "selected_arrangement must point at the arrangement"
-        )
+        // One group is still what gives the deck its order.
+        XCTAssertEqual(generated.all(12).count, 1)
     }
 
-    /// An image outside the home folder cannot be named by a home-relative path, so
-    /// it falls back to the root relative to the document itself.
-    ///
-    /// The app never produces this — decks are always written into the bin under
-    /// `~/` — so it is pinned here to document the behaviour rather than to
-    /// defend a path anyone takes.
-    func testMediaOutsideTheHomeFolderFallsBackToTheDocumentsOwnFolder() throws {
-        let slide = ProSlide(
-            imageURL: URL(fileURLWithPath: "/Volumes/USB/Deck/slide-001.jpg"),
-            pixelSize: PixelSize(width: 1920, height: 1080)
-        )
-        let presentation = try ProtoReader.fields(
-            of: ProPresenterDocument.encode(name: "Deck", slides: [slide], homeDirectory: fixtureHome)
-        )
-        let element = try XCTUnwrap(
-            try XCTUnwrap(try XCTUnwrap(presentation.message(13)).messages(10)[1].message(20)).message(5)
-        )
-        let local = try XCTUnwrap(try XCTUnwrap(element.message(2)).message(4))
-        XCTAssertEqual(local.uint(1), 12, "falls back to ROOT_CURRENT_RESOURCE")
-        XCTAssertEqual(local.string(2), "slide-001.jpg", "the bare filename")
-    }
-
-    func testHomeRelativePathRejectsPathsOutsideHome() {
-        let home = URL(fileURLWithPath: "/Users/someone")
+    /// The relative path may climb out of ProPresenter's root with `..`, which is
+    /// what lets a deck stay where it is instead of being copied into
+    /// ProPresenter's own `Media/Imported` tree.
+    func testRelativePathClimbsOutOfTheShowRoot() {
+        let show = URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter")
         XCTAssertEqual(
-            ProPresenterDocument.homeRelativePath(
-                of: URL(fileURLWithPath: "/Users/someone/Pictures/a.jpg"), home: home
+            ProPresenterDocument.relativePath(
+                of: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/a.jpg"),
+                from: show
             ),
-            "Pictures/a.jpg"
+            "Media/a.jpg",
+            "a path inside the root needs no climbing"
         )
-        // A prefix that only *looks* like home: /Users/someoneelse is a
-        // different account and must not match.
-        XCTAssertNil(
-            ProPresenterDocument.homeRelativePath(
-                of: URL(fileURLWithPath: "/Users/someoneelse/a.jpg"), home: home
-            )
+        XCTAssertEqual(
+            ProPresenterDocument.relativePath(
+                of: URL(fileURLWithPath: "/Users/someone/Library/App Support/Bin/Deck JPEGs/a.jpg"),
+                from: show
+            ),
+            "../../Library/App Support/Bin/Deck JPEGs/a.jpg",
+            "and one outside it climbs back out with .."
         )
-        XCTAssertNil(
-            ProPresenterDocument.homeRelativePath(
-                of: URL(fileURLWithPath: "/Volumes/USB/a.jpg"), home: home
-            )
-        )
-        // The home folder itself is not a file inside itself.
-        XCTAssertNil(
-            ProPresenterDocument.homeRelativePath(of: home, home: home)
+        // Siblings share no prefix beyond the volume, so this needs two climbs.
+        XCTAssertEqual(
+            ProPresenterDocument.relativePath(
+                of: URL(fileURLWithPath: "/Users/someone/Desktop/a.jpg"),
+                from: show
+            ),
+            "../../Desktop/a.jpg"
         )
     }
 
     // MARK: - Media references
 
-    /// The details that decide whether ProPresenter finds the images at all. Each
-    /// of these was wrong at least once; they are pinned here so a future change
-    /// cannot quietly reintroduce a deck that imports empty.
+    /// How media must be referenced for ProPresenter to resolve it.
+    ///
+    /// Every one of these was wrong at least once, so each is pinned against
+    /// `Fixtures/real.pro`, a presentation ProPresenter exported itself.
     func testMediaIsReferencedTheWayProPresenterResolvesIt() throws {
         let slide = ProSlide(
-            imageURL: URL(fileURLWithPath: "/Users/someone/Pictures/Sermon Notes 2026-001.jpg"),
+            imageURL: URL(fileURLWithPath: "/Users/someone/Library/App Support/Bin/Deck JPEGs/Sermon Notes 2026-001.jpg"),
             pixelSize: PixelSize(width: 1920, height: 1080)
         )
-        let presentation = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Deck", slides: [slide], homeDirectory: fixtureHome))
-        let cue = try XCTUnwrap(presentation.message(13))
-        let element = try XCTUnwrap(try XCTUnwrap(try XCTUnwrap(cue.messages(10)[1].message(20)).message(5)))
+        let presentation = try ProtoReader.fields(
+            of: ProPresenterDocument.encode(name: "Deck", slides: [slide], showRoot: fixtureShow)
+        )
+        let actions = try XCTUnwrap(presentation.message(13)).messages(10)
+        let element = try XCTUnwrap(mediaElement(of: actions[0]))
 
         let url = try XCTUnwrap(element.message(2))
         let local = try XCTUnwrap(url.message(4))
 
         XCTAssertEqual(
-            local.uint(1), 2,
-            "media must use ROOT_USER_HOME, the root ProPresenter itself writes into a "
-                + "standalone .pro. ROOT_CURRENT_RESOURCE (12) resolves against the bundle being "
-                + "imported, which a standalone .pro does not have, and every slide imports as a placeholder."
+            local.uint(1), 10,
+            "media must use ROOT_SHOW, which resolves against ProPresenter's own document root. "
+                + "All 82 media URLs in real.pro use it."
         )
         XCTAssertEqual(
-            local.string(2), "Pictures/Sermon Notes 2026-001.jpg",
-            "the path is relative to the home folder, not to the .pro"
+            local.string(2), "../../Library/App Support/Bin/Deck JPEGs/Sermon Notes 2026-001.jpg",
+            "the path is relative to ProPresenter's root, and may climb out of it with .."
         )
         XCTAssertEqual(
-            url.string(1), "Pictures/Sermon%20Notes%202026-001.jpg",
-            "absolute_string must be percent-encoded; an unescaped space stops the URL resolving"
+            url.string(1),
+            "file:///Users/someone/Library/App%20Support/Bin/Deck%20JPEGs/Sermon%20Notes%202026-001.jpg",
+            "absolute_string is the full file:// URL, as real.pro records"
         )
         XCTAssertEqual(url.uint(3), 1, "platform: macOS")
 
         let metadata = try XCTUnwrap(element.message(3))
-        XCTAssertEqual(
-            metadata.string(5), "JPG",
-            "a standalone .pro records JPEG in uppercase, matching reference.pro"
-        )
+        XCTAssertEqual(metadata.string(5), "JPG", "uppercase, matching real.pro")
+        XCTAssertEqual(metadata.uint(6), 1, "colour format: SDR")
     }
 
+    /// ProPresenter reads the image's `file.localUrl` as well as the media URL,
+    /// and they have to name the same file or the image resolves inconsistently.
+    /// Both are URL messages, so both nest as `url.local(4).{1:root,2:path}`; the
+    /// longer route is `element.mediaType(5) -> file(2) -> localUrl(1)`.
     func testImageFileLocalURLMatchesTheMediaURL() throws {
         let slide = ProSlide(
-            imageURL: URL(fileURLWithPath: "/Users/someone/Pictures/deck-001.jpg"),
+            imageURL: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/deck-001.jpg"),
             pixelSize: PixelSize(width: 1920, height: 1080)
         )
-        let presentation = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Deck", slides: [slide], homeDirectory: fixtureHome))
-        let cue = try XCTUnwrap(presentation.message(13))
-        let element = try XCTUnwrap(try XCTUnwrap(try XCTUnwrap(cue.messages(10)[1].message(20)).message(5)))
+        let presentation = try ProtoReader.fields(
+            of: ProPresenterDocument.encode(name: "Deck", slides: [slide], showRoot: fixtureShow)
+        )
+        let actions = try XCTUnwrap(presentation.message(13)).messages(10)
+        let element = try XCTUnwrap(mediaElement(of: actions[0]))
 
-        // ProPresenter reads media.image.file.localUrl as well as media.url, and
-        // the two must agree or the image resolves inconsistently. Both are URL
-        // messages, so both nest the same way: url.local(4).path(2).
-        // The longer route is element.image(5) -> file(2) -> localUrl(1).
-        func localPath(_ url: [ProtoReader.Field]?) throws -> [ProtoReader.Field] {
-            try XCTUnwrap(url?.message(4))
-        }
-        let direct = try localPath(element.message(2))
-        let viaFile = try localPath(
+        let direct = try XCTUnwrap(try XCTUnwrap(element.message(2)).message(4))
+        let viaFile = try XCTUnwrap(
             try XCTUnwrap(try XCTUnwrap(element.message(5)).message(2)).message(1)
-        )
-        XCTAssertEqual(direct.string(2), viaFile.string(2), "the two URLs must name the same file")
-        XCTAssertEqual(direct.uint(1), viaFile.uint(1), "the two URLs must use the same root")
-    }
+        ).message(4)
+        let fileLocal = try XCTUnwrap(viaFile)
 
-    func testPercentEncodingEscapesUTF8BytesNotCharacters() {
-        XCTAssertEqual(ProPresenterDocument.percentEncoded("Slide 1.jpg"), "Slide%201.jpg")
-        XCTAssertEqual(
-            ProPresenterDocument.percentEncoded("Sermon Notes 2026-10-04.jpg"),
-            "Sermon%20Notes%202026-10-04.jpg"
-        )
-        // `+` is a legal sub-delim, so it stays as it is.
-        XCTAssertEqual(ProPresenterDocument.percentEncoded("Deck+plus(1).jpg"), "Deck+plus(1).jpg")
-
-        // The accents are two UTF-8 bytes each, and both have to be written out.
-        // Escaping per Character, or reading `asciiValue` (which is nil above
-        // ASCII and falls back to 0), turns this into %00n%00code.
-        XCTAssertEqual(ProPresenterDocument.percentEncoded("Ünïcode.jpg"), "%C3%9Cn%C3%AFcode.jpg")
-        XCTAssertEqual(ProPresenterDocument.percentEncoded("Ünïcode & symbols.jpg"), "%C3%9Cn%C3%AFcode%20&%20symbols.jpg")
-        XCTAssertFalse(
-            ProPresenterDocument.percentEncoded("Ünïcode.jpg").contains("%00"),
-            "a nil asciiValue would silently encode to %00"
-        )
+        XCTAssertEqual(direct.string(2), try XCTUnwrap(fileLocal.string(2)), "same file")
+        XCTAssertEqual(direct.uint(1), try XCTUnwrap(fileLocal.uint(1)), "same root")
+        XCTAssertEqual(direct.string(1), try XCTUnwrap(fileLocal.string(1)), "same absolute URL")
     }
 
     func testEmptyDeckStillDescribesAReadableDocument() throws {
-        let presentation = try ProtoReader.fields(of: ProPresenterDocument.encode(name: "Empty", slides: [], homeDirectory: fixtureHome))
+        let presentation = try ProtoReader.fields(
+            of: ProPresenterDocument.encode(name: "Empty", slides: [], showRoot: fixtureShow)
+        )
         XCTAssertEqual(presentation.all(13).count, 0, "no cues")
         XCTAssertEqual(presentation.all(12).count, 1, "still one group, holding no cues")
-
-        // The arrangement still names that group, and is still selected: an empty
-        // deck that points at nothing is not a valid document.
-        let groupUUID = try XCTUnwrap(
-            try XCTUnwrap(presentation.messages(12).first).message(1)?.message(1)?.string(1)
-        )
-        XCTAssertEqual(
-            try XCTUnwrap(presentation.message(11)).messages(3).map { try XCTUnwrap($0.string(1)) },
-            [groupUUID]
-        )
-        XCTAssertNotNil(try presentation.message(10)?.string(1))
+        XCTAssertEqual(presentation.string(3), "Empty", "and it is still named")
     }
 
     // MARK: - Packaging
@@ -505,35 +466,39 @@ final class ProPresenterPackageTests: XCTestCase {
         )
     }
 
-    /// Every path the manifest names has to resolve to a real file, relative to the
-    /// home folder the URLs are rooted at. This is how ProPresenter finds them.
+    /// Every path the manifest names has to resolve to a real file once it is
+    /// joined to ProPresenter's document root. This is how ProPresenter finds them.
     func testEveryManifestPathResolvesToAFileOnDisk() throws {
         let deck = try makeDeck(imageCount: 3)
         defer { try? FileManager.default.removeItem(at: deck.folder) }
         let out = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: out) }
 
+        // A stand-in for ProPresenter's root that shares a prefix with the
+        // temporary folder, so the manifest has to climb out with `..` exactly as
+        // it does in production.
+        let showRoot = URL(fileURLWithPath: "/Users/runner/Documents/ProPresenter")
         let presentation = try ProPresenterPackage.package(
             group: deck.group,
             destinationDirectory: out,
+            showRoot: showRoot,
             pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
         let manifest = try ProtoReader.fields(of: try Data(contentsOf: presentation))
-        let home = FileManager.default.homeDirectoryForCurrentUser
 
         let paths = try manifest.messages(13).map { cue -> String in
             let actions = try XCTUnwrap(cue.messages(10))
-            let element = try XCTUnwrap(try XCTUnwrap(actions[1].message(20)).message(5))
+            let element = try XCTUnwrap(mediaElement(of: actions[0]))
             let local = try XCTUnwrap(try XCTUnwrap(element.message(2)).message(4))
-            XCTAssertEqual(local.uint(1), 2, "decks live under the home folder, so root 2 applies")
+            XCTAssertEqual(local.uint(1), 10, "media always names ProPresenter's document root")
             return try XCTUnwrap(local.string(2))
         }
         XCTAssertEqual(paths.count, 3)
         for path in paths {
-            let target = home.appendingPathComponent(path)
+            let target = showRoot.appendingPathComponent(path).standardizedFileURL
             XCTAssertTrue(
                 FileManager.default.fileExists(atPath: target.path),
-                "manifest names \(path), which does not resolve to a file under the home folder"
+                "manifest names \(path), which does not resolve to a file under ProPresenter's root"
             )
         }
 
@@ -542,9 +507,9 @@ final class ProPresenterPackageTests: XCTestCase {
 // same helper production uses, so this pins the contract exactly: a manifest
 // naming some other file that happened to exist would still fail.
         let expected = Set(deck.group.imageURLs.compactMap {
-            ProPresenterDocument.homeRelativePath(of: $0, home: home)
+            ProPresenterDocument.relativePath(of: $0, from: showRoot)
         })
-        XCTAssertEqual(expected.count, 3, "the test deck's images must be under the home folder")
+        XCTAssertEqual(expected.count, 3, "every test image must be nameable from the show root")
         XCTAssertEqual(Set(paths), expected, "the manifest must name exactly the deck's images")
 
         // And the images are left exactly as they were: the packager must not
@@ -574,13 +539,17 @@ final class ProPresenterPackageTests: XCTestCase {
         let presentation = try ProPresenterPackage.package(
             group: group,
             destinationDirectory: out,
+            showRoot: URL(fileURLWithPath: "/Users/runner/Documents/ProPresenter"),
             pixelSize: { _ in PixelSize(width: 800, height: 600) }
         )
         XCTAssertEqual(presentation.lastPathComponent, "Awkward Names.pro")
         XCTAssertEqual(presentation.deletingLastPathComponent(), out)
 
         let manifest = try ProtoReader.fields(of: try Data(contentsOf: presentation))
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let showRoot = try XCTUnwrap(
+            ProPresenterPackage.showRootUsedByLastPackage(),
+            "the test must know which root the manifest was built against"
+        )
         var seen: [String] = []
         for cue in try manifest.messages(13) {
             let actions = try XCTUnwrap(cue.messages(10))
@@ -593,16 +562,17 @@ final class ProPresenterPackageTests: XCTestCase {
             XCTAssertTrue(awkward.contains(filename), "unexpected filename \(filename)")
             seen.append(filename)
             XCTAssertTrue(
-                FileManager.default.fileExists(atPath: home.appendingPathComponent(path).path),
-                "\(path) does not resolve to a file under the home folder"
+                FileManager.default.fileExists(
+                    atPath: showRoot.appendingPathComponent(path).standardizedFileURL.path
+                ),
+                "\(path) does not resolve to a file under ProPresenter's root"
             )
 
-            // Percent-encoding applies to the whole home-relative path.
+            // The absolute URL is percent-encoded even though the relative path is
+            // not, so a name with a space survives both forms.
             let display = try XCTUnwrap(url.string(1))
-            XCTAssertFalse(
-                display.contains(" "),
-                "absolute_string must be percent-encoded: \(display)"
-            )
+            XCTAssertTrue(display.hasPrefix("file:///"), "absolute_string is a full URL")
+            XCTAssertFalse(display.contains(" "), "and it is percent-encoded: \(display)")
         }
         XCTAssertEqual(Set(seen), Set(awkward), "every awkward filename must be referenced")
     }
@@ -685,13 +655,10 @@ final class ProPresenterPackageTests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// The home folder the fixture-shaped manifests are built against.
-    ///
-    /// The test image URLs already live under `/Users/someone/Pictures`, so with
-    /// this as home they produce `Pictures/deck-001.jpg` — the same shape
-    /// `Fixtures/reference.pro` records. Injecting it keeps the expectations
-    /// independent of whoever is running the suite.
-    private var fixtureHome: URL { URL(fileURLWithPath: "/Users/someone") }
+    /// The ProPresenter document root the fixture-shaped manifests name media
+    /// against. Injecting it keeps expectations independent of whoever runs the
+    /// suite, and makes the `..` segments visible in the expected paths.
+    private var fixtureShow: URL { URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter") }
 
     private struct Deck {
         let folder: URL
@@ -717,77 +684,16 @@ final class ProPresenterPackageTests: XCTestCase {
         return Deck(folder: folder, group: group)
     }
 
-    private func referenceFixture() throws -> Data {
+    /// `real.pro`, a presentation ProPresenter exported itself with media in it.
+    /// This is the only trustworthy ground truth for how media is referenced: the
+    /// older `reference.pro` fixture was hand-edited, and its paths were replaced
+    /// with sequential placeholders, so nothing about URL semantics could be
+    /// learned from it.
+    private func realFixture() throws -> Data {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .appendingPathComponent("Fixtures")
-            .appendingPathComponent("reference.pro")
+            .appendingPathComponent("real.pro")
         return try Data(contentsOf: url)
-    }
-
-    /// Asserts two messages carry the same fields, recursively, so that
-    /// ProPresenter would read them the same way.
-    ///
-    /// `ignoring` holds field numbers to skip at this level and at every level
-    /// below. Paths, identifiers and labels are compared only for presence: they
-    /// legitimately differ between the recording and anything this app writes.
-    ///
-    /// `ignoreAnywhere` is the opposite: field numbers to skip wherever they turn
-    /// up, used for the URL's field 1, which is *meant* to differ — the recording
-    /// resolves against the home folder, ours against the `.pro`'s own folder.
-    private func assertSameShape(
-        _ ours: [ProtoReader.Field],
-        _ theirs: [ProtoReader.Field],
-        ignoring ignored: Set<Int>,
-        ignoreAnywhere: Set<Int> = [],
-        context: String,
-        depth: Int = 0,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        guard depth < 12 else { return }
-        for field in ours where !ignored.contains(field.number) {
-            guard let match = theirs.first(where: {
-                $0.number == field.number && $0.wireType == field.wireType
-            }) else {
-                return XCTFail("\(context): field \(field.number) is not in the reference", file: file, line: line)
-            }
-            // String payloads are identifiers, labels, filenames and URLs.
-            if let bytes = field.bytes, isText(bytes) { continue }
-            switch field.wireType {
-            case 2:
-                let ourNested = try? ProtoReader.fields(of: field.bytes!)
-                let theirNested = try? ProtoReader.fields(of: match.bytes!)
-                guard let ours = ourNested, let theirs = theirNested else {
-                    return XCTFail(
-                        "\(context): field \(field.number) is a message in only one of the two",
-                        file: file, line: line
-                    )
-                }
-                XCTAssertEqual(
-                    ours.count, theirs.count,
-                    "\(context): field \(field.number) holds a different number of fields",
-                    file: file, line: line
-                )
-                assertSameShape(
-                    ours, theirs,
-                    ignoring: ignored,
-                    ignoreAnywhere: ignoreAnywhere,
-                    context: "\(context).\(field.number)", depth: depth + 1, file: file, line: line
-                )
-            default:
-                guard !ignoreAnywhere.contains(field.number) else { continue }
-                let ours = field.varint.map(String.init) ?? "nil"
-                let theirs = match.varint.map(String.init) ?? "nil"
-                XCTAssertEqual(
-                    ours, theirs,
-                    "\(context): field \(field.number) disagrees with the reference", file: file, line: line
-                )
-            }
-        }
-    }
-
-    private func isText(_ data: Data) -> Bool {
-        !data.isEmpty && data.allSatisfy { (0x20..<0x7F).contains($0) }
     }
 }

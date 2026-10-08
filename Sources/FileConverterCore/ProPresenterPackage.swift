@@ -30,12 +30,15 @@ public enum ProPresenterPackage {
     ///   - group: the converted deck to package.
     ///   - destinationDirectory: where to write the `.pro`. Defaults to the
     ///     `Pro` folder alongside the bin.
+    ///   - showRoot: ProPresenter's document root, which media paths are written
+    ///     relative to.
     ///   - pixelSize: resolves an image's dimensions. Injectable so the writer
     ///     can be tested without decoding real images.
     @discardableResult
     public static func package(
         group: ConversionGroup,
         destinationDirectory: URL = BinStorage.presentationsDirectory,
+        showRoot: URL = ProPresenterInstallation.defaultDocumentRoot,
         pixelSize: (URL) -> PixelSize?
     ) throws -> URL {
         let images = group.imageURLs
@@ -55,22 +58,13 @@ public enum ProPresenterPackage {
             .appendingPathComponent(name)
             .appendingPathExtension(fileExtension)
 
-        let manifest = ProPresenterDocument.encode(name: name, slides: slides)
+        let manifest = ProPresenterDocument.encode(name: name, slides: slides, showRoot: showRoot)
         do {
             try manifest.write(to: destination, options: .atomic)
         } catch {
             throw ProPackageError.writeFailed("The file could not be saved.")
         }
         return destination
-    }
-
-    /// Convenience overload that reads each image's real pixel dimensions.
-    @discardableResult
-    public static func package(
-        group: ConversionGroup,
-        destinationDirectory: URL = BinStorage.presentationsDirectory
-    ) throws -> URL {
-        try package(group: group, destinationDirectory: destinationDirectory, pixelSize: pixelSize(ofImageAt:))
     }
 
     // MARK: - Naming
@@ -87,6 +81,25 @@ public enum ProPresenterPackage {
     }
 
     // MARK: - Image dimensions
+
+    /// Convenience overload that reads each image's real pixel dimensions, and
+    /// resolves ProPresenter's own document root.
+    ///
+    /// `showRoot` is exposed so tests can name a definite root; production wants
+    /// the real one.
+    @discardableResult
+    public static func package(
+        group: ConversionGroup,
+        destinationDirectory: URL = BinStorage.presentationsDirectory,
+        showRoot: URL = ProPresenterInstallation.defaultDocumentRoot
+    ) throws -> URL {
+        try package(
+            group: group,
+            destinationDirectory: destinationDirectory,
+            showRoot: showRoot,
+            pixelSize: pixelSize(ofImageAt:)
+        )
+    }
 
     /// Reads an image's pixel dimensions from its header, without decoding the
     /// pixels.

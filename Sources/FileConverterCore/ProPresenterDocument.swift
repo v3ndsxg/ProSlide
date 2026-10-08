@@ -22,29 +22,41 @@ enum ProPresenterDocument {
     private enum Application: UInt64 { case proPresenter = 1 }
 
     // rv.data.Action
-    private enum ActionType: UInt64 { case media = 2, presentationSlide = 11 }
-    private enum LayerType: UInt64 { case foreground = 1 }
+    //
+    // `media` is deliberately absent even though the schema defines it: a real
+    // presentation has no media actions at all. Images are elements inside the
+    // presentation-slide action instead.
+    private enum ActionType: UInt64 { case presentationSlide = 11 }
+
+    // rv.data.AlphaType
+    private enum AlphaType: UInt64 { case straight = 1 }
 
     // rv.data.Cue
     private enum CompletionActionType: UInt64 { case last = 1 }
 
     // rv.data.URL.LocalRelativePath.Root
     private enum Root {
-        /// ProPresenter resolves this against the user's home folder, so the
-        /// path is written relative to `~/`.
+        /// Resolved against ProPresenter's own document root — the folder
+        /// holding `Libraries`, `Media` and `Configuration`. This is the only
+        /// root any real ProPresenter file uses: `Fixtures/real.pro` records
+        /// `root: 10` on all 82 of its media URLs.
         ///
-        /// This is what ProPresenter itself writes into a standalone `.pro` —
-        /// `Fixtures/reference.pro` records `root: 2` with `Pictures/deck-001.jpg`
-        /// — and it is the only root we have evidence for. It also means the
-        /// file only resolves on this machine, for this account.
-        static let userHome: UInt64 = 2
+        /// This is why an earlier attempt that "knew" root 10 was wrong imported
+        /// with placeholders: the root was right, but the images it pointed at
+        /// were not under ProPresenter's root. The path is relative to whatever
+        /// that root turns out to be, including `..` segments.
+        static let show: UInt64 = 10
 
-        /// Resolved against the resource being imported, which for
-        /// `ROOT_CURRENT_RESOURCE` means the bundle's own archive root.
+        /// ProPresenter's own library directory.
         ///
-        /// Correct for a `.probundle`, and wrong for a standalone `.pro`: with no
-        /// bundle there is no resource to resolve against, so every slide
-        /// imports as a placeholder. That is what this used to use.
+        /// Tried and wrong for a standalone `.pro`: the schema has no field
+        /// anywhere for image data, so a `.pro` can only point at images that
+        /// exist somewhere already. A `.probundle` carried them inside the
+        /// archive, which is why that worked.
+        static let library: UInt64 = 9
+
+        /// Resolved against the bundle being imported. Meaningless for a
+        /// standalone `.pro`, which has no bundle.
         static let currentResource: UInt64 = 12
     }
 
@@ -52,8 +64,8 @@ enum ProPresenterDocument {
     private enum ColorFormat: UInt64 { case sdr = 1 }
 
     /// ProPresenter records JPEG in uppercase in a standalone `.pro`, which is
-    /// what `Fixtures/reference.pro` shows. (Its own bundles record it
-    /// lowercase, so the two forms genuinely differ.)
+    /// what `Fixtures/real.pro` shows. (Its own bundles record it lowercase, so
+    /// the two forms genuinely differ.)
     private static let jpegFormatIdentifier = "JPG"
 
     /// Measured at roughly 700 bytes per slide, so this keeps a full 300-page deck
@@ -65,14 +77,14 @@ enum ProPresenterDocument {
     /// Serialises the manifest for a presentation named `name` holding `slides`, in
     /// order.
     ///
-    /// Each slide's media is named by a path relative to `homeDirectory`, which
-    /// ProPresenter resolves against the user's home folder. Injectable so the
-    /// tests can assert exact paths instead of depending on the account running
-    /// them.
+    /// Each slide's media is named by a path relative to `showRoot` — ProPresenter's
+    /// own document root — because that is the only root a real ProPresenter file
+    /// uses. Injectable so the tests can assert exact paths instead of depending
+    /// on the account running them.
     static func encode(
         name: String,
         slides: [ProSlide],
-        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+        showRoot: URL = ProPresenterInstallation.defaultDocumentRoot
     ) -> Data {
         var document = ProtoWriter(reservingCapacity: slides.count * estimatedSlideByteCount)
 
@@ -106,56 +118,94 @@ enum ProPresenterDocument {
         // that do not exist and the deck has no readable order.
         let cueUUIDs = slides.map { _ in newUUID() }
         for (slide, cueUUID) in zip(slides, cueUUIDs) {
-            document.data(13, cue(for: slide, uuid: cueUUID, homeDirectory: homeDirectory))
+            document.data(13, cue(for: slide, uuid: cueUUID, showRoot: showRoot))
         }
 
-        // One group holding every cue, in order, wrapped in one arrangement that
-        // collects it. The arrangement is what `selected_arrangement` below
-        // points at, and between them they are what gives the deck its sequence
-        // and its name in ProPresenter's slide list. Without a selected
-        // arrangement ProPresenter has nothing to show.
-        let groupUUID = newUUID()
-        document.data(12, cueGroup(for: cueUUIDs, groupUUID: groupUUID))
-
-        let arrangementUUID = newUUID()
-        document.message(11) { arrangement in
-            arrangement.message(1) { $0.string(1, arrangementUUID) }
-            arrangement.string(2, name)
-            arrangement.message(3) { $0.string(1, groupUUID) }
-        }
-        document.message(10) { selectedArrangement in
-            selectedArrangement.string(1, arrangementUUID)
-        }
+        // One group holding every cue, in document order.
+        //
+        // No arrangement and no `selected_arrangement`. Those were an earlier
+        // inference of mine and they are wrong: `Fixtures/real.pro`, exported by
+        // ProPresenter itself, records neither. A single flat group is what a
+        // simple deck looks like.
+        document.data(12, cueGroup(for: cueUUIDs))
 
         return document.data
     }
 
     // MARK: - Cues
 
-    private static func cue(for slide: ProSlide, uuid: String, homeDirectory: URL) -> Data {
+    private static func cue(for slide: ProSlide, uuid: String, showRoot: URL) -> Data {
         var cue = ProtoWriter()
         cue.message(1) { $0.string(1, uuid) }
-        cue.string(2, slide.label)
         cue.uint(5, CompletionActionType.last.rawValue)
         cue.message(8) { _ in }
-        cue.data(10, canvasAction(for: slide))
-        cue.data(10, mediaAction(for: slide, homeDirectory: homeDirectory))
+        cue.data(10, slideAction(for: slide, showRoot: showRoot))
         cue.bool(12, true)
         return cue.data
     }
 
-    /// The blank canvas the media is composited over. ProPresenter pairs one of
-    /// these with every media action, so a deck is really "empty slide, then
-    /// image on top of it".
-    private static func canvasAction(for slide: ProSlide) -> Data {
+    /// One cue carries exactly **one** action: a presentation slide with the image
+    /// nested inside its base slide.
+    ///
+    /// This is the single most important structural fact about the format, and I
+    /// had it wrong for a long time. Earlier versions of this writer emitted two
+    /// actions per cue — a blank canvas plus a separate `ACTION_TYPE_MEDIA` —
+    /// which reads plausibly and even produced valid protobuf, but no
+    /// ProPresenter-written file contains a media action at all: `real.pro` has 41
+    /// cues and 41 presentation-slide actions, and zero media actions. The image
+    /// hangs off the slide at `10.23.2.1.1.1.9.3.2`, which is the path walked below.
+    private static func slideAction(for slide: ProSlide, showRoot: URL) -> Data {
+        let location = mediaLocation(for: slide, showRoot: showRoot)
         var action = ProtoWriter()
         action.message(1) { uuid in uuid.string(1, newUUID()) }
-        action.message(3) { label in label.string(2, slide.label) }
         action.bool(6, true)
         action.uint(9, ActionType.presentationSlide.rawValue)
         action.message(23) { slideType in
             slideType.message(2) { presentationSlide in
                 presentationSlide.message(1) { baseSlide in
+                    // base_slide.elements -> element -> graphics -> media -> the URL
+                    baseSlide.message(1) { element in
+                        element.message(1) { graphics in
+                            graphics.message(1) { uuid in uuid.string(1, newUUID()) }
+                            graphics.double(5, 1.0)  // opacity
+                            graphics.message(9) { mediaHolder in
+                                mediaHolder.message(3) { mediaElement in
+                                    mediaElement.message(1) { uuid in uuid.string(1, newUUID()) }
+                                    mediaElement.message(2) { url in location.write(to: &url) }
+                                    mediaElement.message(3) { metadata in
+                                        metadata.string(5, jpegFormatIdentifier)
+                                        metadata.uint(6, ColorFormat.sdr.rawValue)
+                                    }
+                                    mediaElement.message(5) { elementType in
+                                        elementType.message(1) { drawing in
+                                            drawing.message(5) { natural in size(&natural, slide.pixelSize) }
+                                            // An all-zero origin and size tells
+                                            // ProPresenter to fit the image to the
+                                            // canvas, which is what `real.pro`
+                                            // records: both submessages are empty.
+                                            drawing.message(7) { bounds in
+                                                bounds.message(1) { origin in _ = origin }
+                                                bounds.message(2) { boundsSize in _ = boundsSize }
+                                            }
+                                            drawing.message(14) { crop in _ = crop }
+                                            drawing.uint(15, AlphaType.straight.rawValue)
+                                        }
+                                        // The same URL a second time, as
+                                        // `image.file.localUrl`. ProPresenter
+                                        // reads both and they have to agree.
+                                        elementType.message(2) { file in
+                                            file.message(1) { localURL in location.write(to: &localURL) }
+                                        }
+                                    }
+                                }
+                                mediaHolder.uint(4, 1)
+                            }
+                        }
+                    }
+                    baseSlide.uint(4, 1)  // draws_background
+                    baseSlide.message(5) { background in
+                        background.float(4, 1)  // opaque black
+                    }
                     baseSlide.message(6) { canvas in size(&canvas, slide.pixelSize) }
                     baseSlide.message(7) { canvasUUID in canvasUUID.string(1, newUUID()) }
                 }
@@ -167,59 +217,19 @@ enum ProPresenterDocument {
         return action.data
     }
 
-    private static func mediaAction(for slide: ProSlide, homeDirectory: URL) -> Data {
-        var action = ProtoWriter()
-        action.message(1) { uuid in uuid.string(1, newUUID()) }
-        action.bool(6, true)
-        action.uint(9, ActionType.media.rawValue)
-        // Resolved once so the element URL and the image file's localUrl cannot
-        // disagree; ProPresenter reads both and they have to name the same file.
-        let location = mediaLocation(for: slide, homeDirectory: homeDirectory)
-        action.message(20) { media in
-            media.message(5) { element in
-                element.message(1) { uuid in uuid.string(1, newUUID()) }
-                element.message(2) { url in location.write(to: &url) }
-                element.message(3) { metadata in
-                    metadata.string(5, jpegFormatIdentifier)
-                    metadata.uint(6, ColorFormat.sdr.rawValue)
-                }
-                element.message(5) { type in
-                    type.message(1) { drawing in
-                        drawing.message(5) { natural in size(&natural, slide.pixelSize) }
-                        // An all-zero origin and size tells ProPresenter to fit
-                        // the image to the canvas itself.
-                        drawing.message(7) { bounds in
-                            bounds.message(1) { origin in
-                                origin.double(1, 0)
-                                origin.double(2, 0)
-                            }
-                            bounds.message(2) { boundsSize in
-                                size(&boundsSize, PixelSize(width: 0, height: 0))
-                            }
-                        }
-                        drawing.message(14) { crop in _ = crop }
-                        drawing.uint(15, 1)  // alpha_type: straight
-                        drawing.bool(16, true)
-                    }
-                    type.message(2) { file in
-                        file.message(1) { localURL in location.write(to: &localURL) }
-                    }
-                }
-            }
-            media.message(8) { audio in _ = audio }
-            media.uint(10, LayerType.foreground.rawValue)
-        }
-        return action.data
-    }
-
-    /// Where ProPresenter should look for one slide's image: a path and the
-    /// root that path is relative to.
+    /// Where ProPresenter should look for one slide's image: a path and the root
+    /// that path is relative to.
+    ///
+    /// `absoluteString` is the full `file://` URL, because that is what
+    /// `real.pro` records for all 82 of its media URLs — not a
+    /// percent-encoded fragment.
     private struct MediaLocation {
         let path: String
         let root: UInt64
+        let absoluteString: String
 
         func write(to writer: inout ProtoWriter) {
-            writer.string(1, ProPresenterDocument.percentEncoded(path))
+            writer.string(1, absoluteString)
             writer.uint(3, Platform.macOS.rawValue)
             writer.message(4) { local in
                 local.uint(1, root)
@@ -228,44 +238,52 @@ enum ProPresenterDocument {
         }
     }
 
-    /// The home-relative path for `slide`'s image, under the user's home folder.
-    ///
-    /// An image outside the home folder cannot be expressed that way, so it falls
-    /// back to the root relative to the document itself. The app never gets
-    /// there — decks are always written into the bin under `~/` — but a `.pro`
-    /// built from an arbitrary folder should still say something coherent.
-    private static func mediaLocation(for slide: ProSlide, homeDirectory: URL) -> MediaLocation {
-        if let relative = homeRelativePath(of: slide.imageURL, home: homeDirectory) {
-            return MediaLocation(path: relative, root: Root.userHome)
-        }
-        return MediaLocation(path: slide.imageURL.lastPathComponent, root: Root.currentResource)
+    /// `slide`'s image, named the way `real.pro` names its own: relative to
+    /// ProPresenter's document root, with the absolute URL alongside it.
+    private static func mediaLocation(for slide: ProSlide, showRoot: URL) -> MediaLocation {
+        MediaLocation(
+            path: relativePath(of: slide.imageURL, from: showRoot)
+                ?? slide.imageURL.lastPathComponent,
+            root: Root.show,
+            absoluteString: slide.imageURL.standardizedFileURL.absoluteString
+        )
     }
 
-    /// `url` relative to `home`, or nil when it does not lie inside `home`.
+    /// `url` expressed relative to `root`, allowing `..` to climb out of it.
     ///
-    /// Both sides are standardized first, so a symlinked or non-normalised home
-    /// path still matches, and the leading `/` is dropped so the result is
-    /// relative in the same way ProPresenter's own files are.
-    static func homeRelativePath(of url: URL, home: URL) -> String? {
-        let rootPath = home.standardizedFileURL.path
-        let filePath = url.standardizedFileURL.path
-        guard filePath.hasPrefix(rootPath + "/") else { return nil }
-        return String(filePath.dropFirst(rootPath.count + 1))
+    /// This is what lets a deck stay where it is rather than being copied into
+    /// ProPresenter's own `Media/Imported` tree: ProPresenter's root and the
+    /// bin are both under the home folder, so the path from one to the other
+    /// starts with `..`. If ProPresenter normalises and rejects those, the
+    /// fallback is to write the images into its tree instead — but nothing in
+    /// the schema forbids them, and avoiding a second copy of every slide is
+    /// worth the attempt.
+    ///
+    /// Returns nil only when the two paths share no common ancestor that can be
+    /// climbed to, which means they are on different volumes.
+    static func relativePath(of url: URL, from root: URL) -> String? {
+        let target = url.standardizedFileURL.pathComponents.filter { $0 != "/" }
+        let base = root.standardizedFileURL.pathComponents.filter { $0 != "/" }
+        let shared = zip(base, target).prefix { $0 == $1 }.count
+        // A path cannot climb above the filesystem root, so a relative path
+        // between two absolute paths on one volume always exists.
+        guard shared <= min(base.count, target.count) else { return nil }
+        let climbs = Array(repeating: "..", count: base.count - shared)
+        let descent = target[shared...]
+        let combined = climbs + descent
+        guard !combined.isEmpty else { return "." }
+        return combined.joined(separator: "/")
     }
 
-    /// Every slide in one group, in order, which is what gives the deck its
-    /// order in ProPresenter's slide list.
+    /// Every slide in one group, in document order.
     ///
-    /// The group needs a stable UUID of its own because the arrangement
-    /// references it by identifier; ProPresenter cannot resolve an arrangement
-    /// whose `group_identifiers` point at a UUID nothing else carries.
-    ///
-    /// `cueUUIDs` are the same identifiers the cues carry in their own field 1,
-    /// in the order the cues appear in the document.
-    private static func cueGroup(for cueUUIDs: [String], groupUUID: String) -> Data {
+    /// `cueUUIDs` are the same identifiers the cues carry in their own field 1.
+    /// A group whose identifiers do not match the cues leaves ProPresenter with
+    /// no readable order, so these must be the identical strings.
+    private static func cueGroup(for cueUUIDs: [String]) -> Data {
         var group = ProtoWriter()
         group.message(1) { inner in
-            inner.message(1) { identifier in identifier.string(1, groupUUID) }
+            inner.message(1) { identifier in identifier.string(1, newUUID()) }
             inner.message(4) { hotKey in _ = hotKey }
         }
         for cueUUID in cueUUIDs {
@@ -283,37 +301,5 @@ enum ProPresenterDocument {
 
     private static func newUUID() -> String {
         UUID().uuidString.uppercased()
-    }
-
-    /// Percent-encodes the characters that are not allowed unescaped in the
-    /// path component of a URL.
-    ///
-    /// Not cosmetic: a deck called `Sermon Notes 2026` produces images with
-    /// spaces in their names, and an unescaped space in `absolute_string` stops
-    /// the URL resolving. `Fixtures/reference.pro` records the encoded form —
-    /// `Pictures/5ways%20to%20give.jpg`.
-    ///
-    /// Anything outside the allowed set is escaped as its UTF-8 bytes, one
-    /// `%XX` per byte. Escaping a *character* would be wrong: a filename like
-    /// `Ünïcode.jpg` is two bytes per accented letter in UTF-8, and both have to
-    /// be written out or ProPresenter decodes something else entirely.
-    static func percentEncoded(_ name: String) -> String {
-        var allowed = Set<Character>()
-        allowed.formUnion("abcdefghijklmnopqrstuvwxyz")
-        allowed.formUnion("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-        allowed.formUnion("0123456789")
-        allowed.formUnion("-._~!$&'()*+,;=:@/")
-
-        var encoded = ""
-        for character in name {
-            if allowed.contains(character) {
-                encoded.append(character)
-            } else {
-                for byte in String(character).utf8 {
-                    encoded += String(format: "%%%02X", byte)
-                }
-            }
-        }
-        return encoded
     }
 }
