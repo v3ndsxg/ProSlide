@@ -197,6 +197,7 @@ struct ContentView: View {
                 Label("Bin", systemImage: "photo.stack").font(.headline)
                 Spacer()
                 Button("Open Folder") { BinOpener.open(queue.binRootURL) }
+                Button("Presentations") { BinOpener.open(queue.binPresentationsURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
             }
             Picker("Card drag", selection: $queue.dragMode) {
@@ -231,7 +232,7 @@ struct ContentView: View {
             }
             return hint
         case .presentation:
-            var hint = "Each card drags the deck's .pro, which opens as one named presentation with every slide attached. It points at the images in your Library folder, so it resolves on this Mac only."
+            var hint = "Each card drags the deck's .pro, which opens as one named presentation with every slide attached. Presentations are kept in their own folder — use Presentations to find them. They point at the images in your Library folder, so they resolve on this Mac only."
             if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
                 hint += " They are written in the background, so a card still being written drags its JPEG folder instead."
             }

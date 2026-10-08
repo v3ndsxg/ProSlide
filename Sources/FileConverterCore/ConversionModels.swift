@@ -44,6 +44,25 @@ public enum BinStorage {
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         return bin
     }
+
+    /// Where the `.pro` files are written.
+    ///
+    /// Deliberately *outside* each deck's folder. ProPresenter imports a folder
+    /// that contains a `.pro` as a presentation rather than as a sequence of
+    /// slides, so leaving one there silently breaks the JPEG-folder drag: the
+    /// deck arrives as a presentation instead of as loose images. A deck folder
+    /// holds JPEGs and nothing else.
+    ///
+    /// A sibling of `Bin` rather than a subfolder, so `scanBin` cannot mistake it
+    /// for a deck. It is safe to keep them apart because media paths in a `.pro`
+    /// are relative to the home folder, not to the `.pro` itself, so the file does
+    /// not need to sit beside its images.
+    public static var presentationsDirectory: URL {
+        let presentations = rootURL.deletingLastPathComponent()
+            .appendingPathComponent("Pro", isDirectory: true)
+        try? FileManager.default.createDirectory(at: presentations, withIntermediateDirectories: true)
+        return presentations
+    }
 }
 
 public struct ConversionOptions: Sendable {

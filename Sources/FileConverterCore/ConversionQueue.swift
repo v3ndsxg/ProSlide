@@ -47,6 +47,7 @@ public final class ConversionQueue: ObservableObject {
     @Published public private(set) var presentationFailures: [String: String] = [:]
 
     public var binRootURL: URL { BinStorage.rootURL }
+    public var binPresentationsURL: URL { BinStorage.presentationsDirectory }
 
     /// The single-file conversion injected by the initialiser. Deliberately
     /// not named `convert`: a stored property and a `convert()` method cannot
@@ -340,9 +341,11 @@ public final class ConversionQueue: ObservableObject {
         }
     }
 
-    /// Empties the bin: every converted document, plus the `.pro` written inside
-    /// each one. Presentations live in their own document's folder, so removing
-    /// the folder takes them with it.
+    /// Empties the bin: every converted document, plus the `.pro` written for each
+    /// one.
+    ///
+    /// Presentations live in their own folder rather than inside each document's,
+    /// so that folder has to go too or Clear would leave them behind.
     public func clearBin() throws {
         presentationTask?.cancel()
         presentations = [:]
@@ -350,6 +353,9 @@ public final class ConversionQueue: ObservableObject {
         for folder in groups.map(\.folderURL) {
             try FileManager.default.removeItem(at: folder)
         }
+        // `try?`: the folder may never have been created, and failing to clear a
+        // bin because of that would be worse than leaving it.
+        try? FileManager.default.removeItem(at: BinStorage.presentationsDirectory)
         reloadBin()
     }
 }

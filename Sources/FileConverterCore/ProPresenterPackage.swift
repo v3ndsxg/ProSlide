@@ -6,19 +6,17 @@ import ImageIO
 /// Turns a converted deck's JPEGs into a ProPresenter presentation: one `.pro`
 /// file that opens as a named presentation with every image already attached.
 ///
-/// The `.pro` is written into the deck's own folder, beside the JPEGs, and points
-/// at them by bare filename. That is what makes a single drag into ProPresenter
-/// bring in the whole deck, and it is also what keeps the manifest's media URLs
-/// resolvable: the deck folder is the resource the `.pro` is in.
+/// The `.pro` is written to `destinationDirectory` — the bin's `Pro` folder — not
+/// into the deck's own folder. ProPresenter imports a folder containing a `.pro`
+/// as a presentation rather than as a sequence of slides, so a `.pro` left
+/// beside a deck's JPEGs turns a JPEG-folder drag into a presentation import. The
+/// two locations need not agree: media paths in a `.pro` are relative to the home
+/// folder, not to the file itself.
 ///
-/// The trade-off is that this is not self-contained. Moving the `.pro` away from
-/// its JPEGs, or mailing it on its own, leaves ProPresenter pointing at images
-/// that are no longer there. Copy the whole folder, or use **Save…** to put the
-/// images somewhere durable.
-///
-/// Presentations are written into each deck's folder rather than a shared one, so
-/// clearing the bin takes them with it and rescanning the bin ignores them (it
-/// only looks at `.jpg`).
+/// The trade-off is that a `.pro` is not self-contained and not portable. It
+/// resolves only on this machine, for this account, and stops working if the
+/// images move. The format has nowhere to put image data, so there is no
+/// single-file alternative; **Save…** puts the images somewhere durable.
 public enum ProPresenterPackage {
 
     /// The extension ProPresenter gives these.
@@ -30,11 +28,14 @@ public enum ProPresenterPackage {
     ///
     /// - Parameters:
     ///   - group: the converted deck to package.
+    ///   - destinationDirectory: where to write the `.pro`. Defaults to the
+    ///     `Pro` folder alongside the bin.
     ///   - pixelSize: resolves an image's dimensions. Injectable so the writer
     ///     can be tested without decoding real images.
     @discardableResult
     public static func package(
         group: ConversionGroup,
+        destinationDirectory: URL = BinStorage.presentationsDirectory,
         pixelSize: (URL) -> PixelSize?
     ) throws -> URL {
         let images = group.imageURLs
@@ -50,7 +51,7 @@ public enum ProPresenterPackage {
             return ProSlide(imageURL: url, pixelSize: size)
         }
 
-        let destination = group.folderURL
+        let destination = destinationDirectory
             .appendingPathComponent(name)
             .appendingPathExtension(fileExtension)
 
@@ -65,8 +66,11 @@ public enum ProPresenterPackage {
 
     /// Convenience overload that reads each image's real pixel dimensions.
     @discardableResult
-    public static func package(group: ConversionGroup) throws -> URL {
-        try package(group: group, pixelSize: pixelSize(ofImageAt:))
+    public static func package(
+        group: ConversionGroup,
+        destinationDirectory: URL = BinStorage.presentationsDirectory
+    ) throws -> URL {
+        try package(group: group, destinationDirectory: destinationDirectory, pixelSize: pixelSize(ofImageAt:))
     }
 
     // MARK: - Naming

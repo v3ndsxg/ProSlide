@@ -444,20 +444,30 @@ final class ProPresenterPackageTests: XCTestCase {
 
     // MARK: - Packaging
 
-    /// The `.pro` has to land in the deck's own folder, because that is the
-    /// folder ProPresenter resolves its media paths against. Written anywhere
-    /// else it opens with every image missing.
-    func testPresentationIsWrittenBesideTheImagesItPointsAt() throws {
+    /// The `.pro` must be written *outside* the deck's own folder.
+    ///
+    /// ProPresenter imports a folder containing a `.pro` as a presentation rather
+    /// than as a sequence of slides, so a `.pro` left beside a deck's JPEGs turns
+    /// the JPEG-folder drag into a presentation import — which is exactly what
+    /// happened before this was separated out.
+    func testPresentationIsWrittenOutsideTheDeckFolder() throws {
         let deck = try makeDeck(imageCount: 3)
         defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
 
         let presentation = try ProPresenterPackage.package(
             group: deck.group,
+            destinationDirectory: out,
             pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
 
         XCTAssertEqual(presentation.lastPathComponent, "Sample Deck.pro")
-        XCTAssertEqual(presentation.deletingLastPathComponent(), deck.folder)
+        XCTAssertEqual(presentation.deletingLastPathComponent(), out)
+        XCTAssertNotEqual(
+            presentation.deletingLastPathComponent(), deck.folder,
+            "the .pro must not land in the deck folder or the JPEG-folder drag breaks"
+        )
 
         // Not a ZIP any more: a `.pro` is a bare protobuf message, which is what
         // makes it readable by ProPresenter at all.
@@ -469,14 +479,43 @@ final class ProPresenterPackageTests: XCTestCase {
         XCTAssertNoThrow(try ProtoReader.fields(of: bytes))
     }
 
+    /// The regression guard for the behaviour above: a deck folder holds JPEGs
+    /// and nothing else. ProPresenter sees a stray `.pro` in there and imports the
+    /// presentation instead of the slides.
+    func testDeckFolderHoldsJPEGsAndNothingElse() throws {
+        let deck = try makeDeck(imageCount: 2)
+        defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
+
+        _ = try ProPresenterPackage.package(
+            group: deck.group,
+            destinationDirectory: out,
+            pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
+        )
+
+        let names = try FileManager.default.contentsOfDirectory(atPath: deck.folder.path)
+        XCTAssertEqual(
+            names.sorted(), ["Sample Deck-001.jpg", "Sample Deck-002.jpg"],
+            "the packager must not add anything to a deck folder"
+        )
+        XCTAssertTrue(
+            names.allSatisfy { ["jpg", "jpeg"].contains(URL(fileURLWithPath: $0).pathExtension.lowercased()) },
+            "only JPEGs may live in a deck folder"
+        )
+    }
+
     /// Every path the manifest names has to resolve to a real file, relative to the
     /// home folder the URLs are rooted at. This is how ProPresenter finds them.
     func testEveryManifestPathResolvesToAFileOnDisk() throws {
         let deck = try makeDeck(imageCount: 3)
         defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
 
         let presentation = try ProPresenterPackage.package(
             group: deck.group,
+            destinationDirectory: out,
             pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
         let manifest = try ProtoReader.fields(of: try Data(contentsOf: presentation))
@@ -528,12 +567,17 @@ final class ProPresenterPackageTests: XCTestCase {
         }
         let group = ConversionGroup(sourceName: "Awkward Names JPEGs", folderURL: folder)
 
+        // A destination entirely outside the deck folder, matching where the app really
+        // writes presentations.
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
         let presentation = try ProPresenterPackage.package(
             group: group,
+            destinationDirectory: out,
             pixelSize: { _ in PixelSize(width: 800, height: 600) }
         )
         XCTAssertEqual(presentation.lastPathComponent, "Awkward Names.pro")
-        XCTAssertEqual(presentation.deletingLastPathComponent(), folder)
+        XCTAssertEqual(presentation.deletingLastPathComponent(), out)
 
         let manifest = try ProtoReader.fields(of: try Data(contentsOf: presentation))
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -569,13 +613,17 @@ final class ProPresenterPackageTests: XCTestCase {
         let deck = try makeDeck(imageCount: 2)
         defer { try? FileManager.default.removeItem(at: deck.folder) }
 
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
         let first = try ProPresenterPackage.package(
-            group: deck.group, pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
+            group: deck.group, destinationDirectory: out,
+            pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
         let before = try Data(contentsOf: first)
 
         let second = try ProPresenterPackage.package(
-            group: deck.group, pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
+            group: deck.group, destinationDirectory: out,
+            pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
         XCTAssertEqual(first, second, "the name is derived from the deck, so it is stable")
 
@@ -585,9 +633,14 @@ final class ProPresenterPackageTests: XCTestCase {
         XCTAssertNotEqual(before, after)
         XCTAssertNoThrow(try ProtoReader.fields(of: after))
 
-        // And the deck folder holds the JPEGs plus the one .pro, nothing else.
-        let names = Set(try FileManager.default.contentsOfDirectory(atPath: deck.folder.path))
-        XCTAssertEqual(names, Set(["Sample Deck-001.jpg", "Sample Deck-002.jpg", "Sample Deck.pro"]))
+        // And it overwrote rather than accumulating: one .pro in the destination,
+        // and the deck folder still holds only its JPEGs.
+        let written = Set(try FileManager.default.contentsOfDirectory(atPath: out.path))
+        XCTAssertEqual(written, Set(["Sample Deck.pro"]))
+        XCTAssertEqual(
+            Set(try FileManager.default.contentsOfDirectory(atPath: deck.folder.path)),
+            Set(["Sample Deck-001.jpg", "Sample Deck-002.jpg"])
+        )
     }
 
     func testPackagingADeckWithNoImagesFails() throws {
@@ -596,7 +649,10 @@ final class ProPresenterPackageTests: XCTestCase {
 
         let group = ConversionGroup(sourceName: "Empty JPEGs", folderURL: folder)
         XCTAssertThrowsError(
-            try ProPresenterPackage.package(group: group, pixelSize: { _ in nil })
+            try ProPresenterPackage.package(
+                group: group, destinationDirectory: try makeTemporaryDirectory(),
+                pixelSize: { _ in nil }
+            )
         ) { error in
             XCTAssertEqual(error as? ProPackageError, .noImages("Empty JPEGs"))
         }
@@ -607,7 +663,10 @@ final class ProPresenterPackageTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: deck.folder) }
 
         XCTAssertThrowsError(
-            try ProPresenterPackage.package(group: deck.group, pixelSize: { _ in nil })
+            try ProPresenterPackage.package(
+                group: deck.group, destinationDirectory: try makeTemporaryDirectory(),
+                pixelSize: { _ in nil }
+            )
         ) { error in
             XCTAssertEqual(error as? ProPackageError, .unreadableImage("Sample Deck-001.jpg"))
         }

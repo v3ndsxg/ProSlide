@@ -81,7 +81,7 @@ CI runs all three suites on a macOS runner on every push, and packages the app w
 4. **Wait for the Bin** to fill in on the right. Each document gets its own `Document Name JPEGs` folder, and the bin remembers everything you have converted, so it is still there next time you open the app. Documents are listed alphabetically.
 5. **Drag the card into ProPresenter.** That is the whole job. Every slide in that document arrives, in order, named `Document-001.jpg`, `Document-002.jpg`, and so on.
 
-Each document also gets a `Name.pro` written beside its JPEGs, so dragging its card into ProPresenter brings the deck in as a single named presentation with every slide attached. A control at the top of the bin switches between that and the plain JPEG folder — see [Presentations](#presentations).
+Each document also gets a `Name.pro` in the bin's `Pro` folder, so dragging its card into ProPresenter brings the deck in as a single named presentation with every slide attached. A control at the top of the bin switches between that and the plain JPEG folder — see [Presentations](#presentations).
 
 If you need a slide that is not the whole document, drag its individual thumbnail instead of the card. And if you want the images somewhere other than ProPresenter, **Save…** copies a document's set to any folder you choose.
 
@@ -99,7 +99,7 @@ A card drag carries **one** thing, never a pile of loose files. That is delibera
 The control at the top of the bin chooses what a card drag hands over:
 
 - **JPEG Folder** — the document's `Name JPEGs` folder. ProPresenter imports it as a plain sequence, which is what you want when pulling slides into a presentation you already have.
-- **.pro Presentation** — a single `Name.pro` written next to the deck's JPEGs, which ProPresenter opens as **one named presentation with every slide attached**.
+- **.pro Presentation** — a single `Name.pro` from the bin's `Pro` folder, which ProPresenter opens as **one named presentation with every slide attached**.
 
 Every document gets its `.pro` written regardless of the setting, so switching is instant and a card whose presentation is still being written falls back to its JPEG folder rather than doing nothing. **Save…** copies a document's JPEGs to a folder you choose.
 
@@ -107,7 +107,7 @@ The `.pro` is **tied to your account on this Mac**. It names its images by a pat
 
 If you would rather pull slides into a presentation you already have, drag an individual thumbnail instead — one image at a time.
 
-Presentations are written into each document's own folder, so **Clear** removes them along with everything else. Each card shows whether its `.pro` is ready, and **Rebuild** rewrites one after its JPEGs changed.
+Presentations are kept in their own `Pro` folder rather than inside a deck's folder, because ProPresenter imports a folder containing a `.pro` as a *presentation* rather than as a sequence of slides — which would quietly break the JPEG Folder option. A deck folder therefore holds JPEGs and nothing else. **Presentations** in the bin reveals the folder in Finder, and **Clear** empties it along with the documents. Each card shows whether its `.pro` is ready, and **Rebuild** rewrites one after its JPEGs changed.
 
 One deliberate omission: generated slides carry no playback duration, so a slide holds until you click rather than advancing on a timer. ProPresenter's own announcement exports set ten seconds, which is right for announcements and wrong for a sermon deck.
 

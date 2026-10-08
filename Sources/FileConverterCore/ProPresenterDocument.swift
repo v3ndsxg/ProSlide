@@ -77,6 +77,12 @@ enum ProPresenterDocument {
         var document = ProtoWriter(reservingCapacity: slides.count * estimatedSlideByteCount)
 
         document.message(1) { applicationInfo in
+            // Only platform and application. ProPresenter also writes
+            // platform_version (2) and application_version (4), and the author of
+            // the published schema marked both required — but omitting them is
+            // deliberate. There is no honest version number to put there:
+            // ProSlide is not ProPresenter, and inventing one risks tripping
+            // version-gated behaviour. ProPresenter opens the file without them.
             applicationInfo.uint(1, Platform.macOS.rawValue)
             applicationInfo.uint(3, Application.proPresenter.rawValue)
         }
