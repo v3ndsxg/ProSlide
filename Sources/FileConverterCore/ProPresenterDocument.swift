@@ -41,22 +41,18 @@ enum ProPresenterDocument {
         /// root any real ProPresenter file uses: `Fixtures/real.pro` records
         /// `root: 10` on all 82 of its media URLs.
         ///
-        /// This is why an earlier attempt that "knew" root 10 was wrong imported
-        /// with placeholders: the root was right, but the images it pointed at
-        /// were not under ProPresenter's root. The path is relative to whatever
-        /// that root turns out to be, including `..` segments.
+        /// ProSlide can use it because it stages its decks into that root first,
+        /// so the path it writes is `Media/Imported/…` like the recording rather
+        /// than a `..` climb out to where the bin happens to live.
         static let show: UInt64 = 10
 
-        /// ProPresenter's own library directory.
-        ///
-        /// Tried and wrong for a standalone `.pro`: the schema has no field
-        /// anywhere for image data, so a `.pro` can only point at images that
-        /// exist somewhere already. A `.probundle` carried them inside the
-        /// archive, which is why that worked.
-        static let library: UInt64 = 9
+        /// `ROOT_SHARED`. Unused: it names a shared location ProPresenter
+        /// defines, and nothing ProSlide needs lives there.
+        static let shared: UInt64 = 9
 
-        /// Resolved against the bundle being imported. Meaningless for a
-        /// standalone `.pro`, which has no bundle.
+        /// `ROOT_CURRENT_RESOURCE`: resolved against the bundle being imported.
+        /// Meaningful for a `.probundle`, which carries its media inside the
+        /// archive; a bare `.pro` has no bundle, so it points at nothing.
         static let currentResource: UInt64 = 12
     }
 
@@ -79,7 +75,9 @@ enum ProPresenterDocument {
     ///
     /// Each slide's media is named by a path relative to `showRoot` — ProPresenter's
     /// own document root — because that is the only root a real ProPresenter file
-    /// uses. Injectable so the tests can assert exact paths instead of depending
+    /// uses. `slides` are therefore expected to name their images *inside* that
+    /// root, which is where the packager links them; the writer itself touches no
+    /// files. Injectable so the tests can assert exact paths instead of depending
     /// on the account running them.
     static func encode(
         name: String,
@@ -240,6 +238,10 @@ enum ProPresenterDocument {
 
     /// `slide`'s image, named the way `real.pro` names its own: relative to
     /// ProPresenter's document root, with the absolute URL alongside it.
+    ///
+    /// The packager has already linked the image into that root, so this is
+    /// normally `Media/Imported/…` — the shape every real presentation
+    /// records, and the one ProPresenter is known to resolve.
     private static func mediaLocation(for slide: ProSlide, showRoot: URL) -> MediaLocation {
         MediaLocation(
             path: relativePath(of: slide.imageURL, from: showRoot)
@@ -251,13 +253,10 @@ enum ProPresenterDocument {
 
     /// `url` expressed relative to `root`, allowing `..` to climb out of it.
     ///
-    /// This is what lets a deck stay where it is rather than being copied into
-    /// ProPresenter's own `Media/Imported` tree: ProPresenter's root and the
-    /// bin are both under the home folder, so the path from one to the other
-    /// starts with `..`. If ProPresenter normalises and rejects those, the
-    /// fallback is to write the images into its tree instead — but nothing in
-    /// the schema forbids them, and avoiding a second copy of every slide is
-    /// worth the attempt.
+    /// ProPresenter's own files never climb: their media sits in `Media` under
+    /// the document root, and the packager puts ProSlide's there too. The
+    /// climbing ability is only kept so a deck staged elsewhere still produces
+    /// a path rather than a bare filename.
     ///
     /// Returns nil only when the two paths share no common ancestor that can be
     /// climbed to, which means they are on different volumes.

@@ -232,7 +232,7 @@ struct ContentView: View {
             }
             return hint
         case .presentation:
-            var hint = "Each card drags the deck's .pro, which opens as one named presentation with every slide attached. Presentations are kept in their own folder — use Presentations to find them. They point at the images in your Library folder, so they resolve on this Mac only."
+            var hint = "Each card drags the deck's .pro, which opens as one named presentation with every slide attached. Presentations are kept in their own folder — use Presentations to find them. ProSlide links each deck's images into ProPresenter's own media folder, so no space is spent twice."
             if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
                 hint += " They are written in the background, so a card still being written drags its JPEG folder instead."
             }

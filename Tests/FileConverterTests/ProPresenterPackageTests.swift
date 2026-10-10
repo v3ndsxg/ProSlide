@@ -81,7 +81,7 @@ final class ProPresenterPackageTests: XCTestCase {
         )
 
         // The image hangs off the slide at 10.23.2.1.1.1.9.3.
-        let first = actions(of: cues[0])[0]
+        let first = try actions(of: cues[0])[0]
         let element = try XCTUnwrap(mediaElement(of: first))
         XCTAssertEqual(
             element.map(\.number).sorted(), [1, 2, 3, 5],
@@ -299,10 +299,14 @@ final class ProPresenterPackageTests: XCTestCase {
         XCTAssertEqual(generated.all(12).count, 1)
     }
 
-    /// The relative path may climb out of ProPresenter's root with `..`, which is
-    /// what lets a deck stay where it is instead of being copied into
-    /// ProPresenter's own `Media/Imported` tree.
-    func testRelativePathClimbsOutOfTheShowRoot() {
+    /// Every path a manifest names is inside ProPresenter's own document root.
+    ///
+    /// ProSlide used to climb out of it with `..` to reach the deck's images
+    /// where they sat in the bin. No real presentation does that — `real.pro`'s
+    /// 41 media files all live under `Media/Imported` — and it is the likeliest
+    /// reason a deck imported as placeholders. The packager now stages its media
+    /// into that tree, so the path is always a descent.
+    func testRelativePathNeverLeavesTheShowRoot() {
         let show = URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter")
         XCTAssertEqual(
             ProPresenterDocument.relativePath(
@@ -312,21 +316,12 @@ final class ProPresenterPackageTests: XCTestCase {
             "Media/a.jpg",
             "a path inside the root needs no climbing"
         )
-        XCTAssertEqual(
+        XCTAssertFalse(
             ProPresenterDocument.relativePath(
-                of: URL(fileURLWithPath: "/Users/someone/Library/App Support/Bin/Deck JPEGs/a.jpg"),
+                of: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/a.jpg"),
                 from: show
-            ),
-            "../../Library/App Support/Bin/Deck JPEGs/a.jpg",
-            "and one outside it climbs back out with .."
-        )
-        // Siblings share no prefix beyond the volume, so this needs two climbs.
-        XCTAssertEqual(
-            ProPresenterDocument.relativePath(
-                of: URL(fileURLWithPath: "/Users/someone/Desktop/a.jpg"),
-                from: show
-            ),
-            "../../Desktop/a.jpg"
+            )?.contains("..") ?? true,
+            "and it never climbs back out"
         )
     }
 
@@ -336,15 +331,28 @@ final class ProPresenterPackageTests: XCTestCase {
     ///
     /// Every one of these was wrong at least once, so each is pinned against
     /// `Fixtures/real.pro`, a presentation ProPresenter exported itself.
+    ///
+    /// This one packages rather than only encoding, because the path is no longer
+    /// a matter of spelling: the packager stages the image into ProPresenter's
+    /// media tree first, and the manifest names it from there.
     func testMediaIsReferencedTheWayProPresenterResolvesIt() throws {
-        let slide = ProSlide(
-            imageURL: URL(fileURLWithPath: "/Users/someone/Library/App Support/Bin/Deck JPEGs/Sermon Notes 2026-001.jpg"),
-            pixelSize: PixelSize(width: 1920, height: 1080)
+        let deck = try makeDeck(imageCount: 1)
+        defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
+
+        let file = try ProPresenterPackage.package(
+            group: deck.group,
+            destinationDirectory: out,
+            showRoot: showRoot,
+            pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
-        let presentation = try ProtoReader.fields(
-            of: ProPresenterDocument.encode(name: "Deck", slides: [slide], showRoot: fixtureShow)
-        )
-        let actions = try XCTUnwrap(presentation.message(13)).messages(10)
+        let manifest = try ProtoReader.fields(of: try Data(contentsOf: file))
+        let cues = try manifest.messages(13)
+        XCTAssertEqual(cues.count, 1)
+        let actions = try cues[0].messages(10)
         let element = try XCTUnwrap(mediaElement(of: actions[0]))
 
         let url = try XCTUnwrap(element.message(2))
@@ -352,17 +360,20 @@ final class ProPresenterPackageTests: XCTestCase {
 
         XCTAssertEqual(
             local.uint(1), 10,
-            "media must use ROOT_SHOW, which resolves against ProPresenter's own document root. "
+            "ROOT_SHOW: media resolves against ProPresenter's own document root. "
                 + "All 82 media URLs in real.pro use it."
         )
         XCTAssertEqual(
-            local.string(2), "../../Library/App Support/Bin/Deck JPEGs/Sermon Notes 2026-001.jpg",
-            "the path is relative to ProPresenter's root, and may climb out of it with .."
+            local.string(2),
+            try stagedPath(of: deck.group, image: deck.group.imageURLs[0].lastPathComponent, in: showRoot),
+            "the image is named from inside ProPresenter's media tree, as real.pro names its own"
         )
+
+        let staged = showRoot.appendingPathComponent(try XCTUnwrap(local.string(2)))
         XCTAssertEqual(
             url.string(1),
-            "file:///Users/someone/Library/App%20Support/Bin/Deck%20JPEGs/Sermon%20Notes%202026-001.jpg",
-            "absolute_string is the full file:// URL, as real.pro records"
+            staged.standardizedFileURL.absoluteString,
+            "absolute_string is the full file:// URL of the staged file, as real.pro records"
         )
         XCTAssertEqual(url.uint(3), 1, "platform: macOS")
 
@@ -417,12 +428,15 @@ final class ProPresenterPackageTests: XCTestCase {
     func testPresentationIsWrittenOutsideTheDeckFolder() throws {
         let deck = try makeDeck(imageCount: 3)
         defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
         let out = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: out) }
 
         let presentation = try ProPresenterPackage.package(
             group: deck.group,
             destinationDirectory: out,
+            showRoot: showRoot,
             pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
 
@@ -433,14 +447,16 @@ final class ProPresenterPackageTests: XCTestCase {
             "the .pro must not land in the deck folder or the JPEG-folder drag breaks"
         )
 
-        // Not a ZIP any more: a `.pro` is a bare protobuf message, which is what
-        // makes it readable by ProPresenter at all.
+        // Not a ZIP any more, and not a probundle either: a `.pro` is a bare
+        // protobuf message, which is what makes it readable by ProPresenter at
+        // all. Its images are staged separately, as linked names.
         let bytes = try Data(contentsOf: presentation)
         XCTAssertFalse(
             bytes.starts(with: [0x50, 0x4B]),
             "a .pro must not be an archive; ProPresenter reads it as a bare message"
         )
         XCTAssertNoThrow(try ProtoReader.fields(of: bytes))
+        XCTAssertLessThan(bytes.count, 4_000, "a manifest names its media; it does not carry it")
     }
 
     /// The regression guard for the behaviour above: a deck folder holds JPEGs
@@ -449,12 +465,15 @@ final class ProPresenterPackageTests: XCTestCase {
     func testDeckFolderHoldsJPEGsAndNothingElse() throws {
         let deck = try makeDeck(imageCount: 2)
         defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
         let out = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: out) }
 
         _ = try ProPresenterPackage.package(
             group: deck.group,
             destinationDirectory: out,
+            showRoot: showRoot,
             pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
 
@@ -469,25 +488,23 @@ final class ProPresenterPackageTests: XCTestCase {
         )
     }
 
-    /// Every path the manifest names has to resolve to a real file once it is
-    /// joined to ProPresenter's document root. This is how ProPresenter finds them.
+    /// Every path the manifest names has to resolve to a real file inside
+    /// ProPresenter's document root. This is how ProPresenter finds them.
     func testEveryManifestPathResolvesToAFileOnDisk() throws {
         let deck = try makeDeck(imageCount: 3)
         defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
         let out = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: out) }
 
-        // A stand-in for ProPresenter's root that shares a prefix with the
-        // temporary folder, so the manifest has to climb out with `..` exactly as
-        // it does in production.
-        let showRoot = URL(fileURLWithPath: "/Users/runner/Documents/ProPresenter")
-        let presentation = try ProPresenterPackage.package(
+        let file = try ProPresenterPackage.package(
             group: deck.group,
             destinationDirectory: out,
             showRoot: showRoot,
             pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
         )
-        let manifest = try ProtoReader.fields(of: try Data(contentsOf: presentation))
+        let manifest = try ProtoReader.fields(of: try Data(contentsOf: file))
 
         let paths = try manifest.messages(13).map { cue -> String in
             let actions = try XCTUnwrap(cue.messages(10))
@@ -498,6 +515,10 @@ final class ProPresenterPackageTests: XCTestCase {
         }
         XCTAssertEqual(paths.count, 3)
         for path in paths {
+            XCTAssertFalse(
+                path.contains(".."),
+                "\(path) climbs out of ProPresenter's root, which no real presentation does"
+            )
             let target = showRoot.appendingPathComponent(path).standardizedFileURL
             XCTAssertTrue(
                 FileManager.default.fileExists(atPath: target.path),
@@ -505,18 +526,29 @@ final class ProPresenterPackageTests: XCTestCase {
             )
         }
 
-        // The paths really are the deck's own images, expressed relative to
-        // ProPresenter's root — not merely names that happen to resolve to
-        // something. Compared against the same helper production uses, so this
-        // pins the contract exactly.
-        let expected = Set(deck.group.imageURLs.compactMap {
-            ProPresenterDocument.relativePath(of: $0, from: showRoot)
-        })
-        XCTAssertEqual(expected.count, 3, "every test image must be nameable from the show root")
-        XCTAssertEqual(Set(paths), expected, "the manifest must name exactly the deck's images")
+        // The paths really are the deck's own images, staged into ProPresenter's
+        // tree — not merely names that happen to resolve to something.
+        XCTAssertEqual(
+            Set(paths.map { ($0 as NSString).lastPathComponent }),
+            Set(deck.group.imageURLs.map(\.lastPathComponent)),
+            "the manifest must name exactly the deck's images"
+        )
 
-        // And the images are left exactly as they were: the packager must not
-        // copy or move them, or the deck's own files would go stale.
+        // And they are the same bytes, not a second copy: a hard link is a second
+        // directory entry for one inode, so a 300-page deck still costs one
+        // storage. This is what keeps staging from duplicating the bin.
+        for image in deck.group.imageURLs {
+            let staged = try XCTUnwrap(
+                stagedFiles(of: deck.group, in: showRoot)[image.lastPathComponent]
+            )
+            XCTAssertEqual(
+                try inode(of: staged), try inode(of: image),
+                "\(image.lastPathComponent) was copied rather than linked"
+            )
+        }
+
+        // The images are left exactly as they were: the packager must not move or
+        // rewrite them, or the deck's own files would go stale.
         XCTAssertEqual(
             try Data(contentsOf: deck.folder.appendingPathComponent("Sample Deck-002.jpg")),
             Data("two".utf8)
@@ -539,10 +571,12 @@ final class ProPresenterPackageTests: XCTestCase {
         // writes presentations.
         let out = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: out) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
         let presentation = try ProPresenterPackage.package(
             group: group,
             destinationDirectory: out,
-            showRoot: URL(fileURLWithPath: "/Users/runner/Documents/ProPresenter"),
+            showRoot: showRoot,
             pixelSize: { _ in PixelSize(width: 800, height: 600) }
         )
         XCTAssertEqual(presentation.lastPathComponent, "Awkward Names.pro")
@@ -561,6 +595,7 @@ final class ProPresenterPackageTests: XCTestCase {
             let filename = (path as NSString).lastPathComponent
             XCTAssertTrue(awkward.contains(filename), "unexpected filename \(filename)")
             seen.append(filename)
+            XCTAssertFalse(path.contains(".."), "\(path) climbs out of the show root")
             XCTAssertTrue(
                 FileManager.default.fileExists(
                     atPath: showRoot.appendingPathComponent(path).standardizedFileURL.path
@@ -578,22 +613,24 @@ final class ProPresenterPackageTests: XCTestCase {
     }
 
     /// A rebuilt presentation replaces the old one rather than leaving a stale
-    /// file beside the deck.
+    /// file beside the deck — and its staging is replaced too, so ProPresenter is
+    /// never offered media the presentation no longer names.
     func testRewritingADeckReplacesTheEarlierPresentation() throws {
         let deck = try makeDeck(imageCount: 2)
         defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
 
         let out = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: out) }
+        let pixelSize: (URL) -> PixelSize? = { _ in PixelSize(width: 1920, height: 1080) }
         let first = try ProPresenterPackage.package(
-            group: deck.group, destinationDirectory: out,
-            pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
         )
         let before = try Data(contentsOf: first)
 
         let second = try ProPresenterPackage.package(
-            group: deck.group, destinationDirectory: out,
-            pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
         )
         XCTAssertEqual(first, second, "the name is derived from the deck, so it is stable")
 
@@ -610,6 +647,113 @@ final class ProPresenterPackageTests: XCTestCase {
         XCTAssertEqual(
             Set(try FileManager.default.contentsOfDirectory(atPath: deck.folder.path)),
             Set(["Sample Deck-001.jpg", "Sample Deck-002.jpg"])
+        )
+    }
+
+    /// Staging is replaced, not joined: a rebuild leaves one media item holding
+    /// one link per slide, however many times it has been built.
+    func testRebuildingReplacesStagedMediaRatherThanAccumulating() throws {
+        let deck = try makeDeck(imageCount: 3)
+        defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
+        let pixelSize: (URL) -> PixelSize? = { _ in PixelSize(width: 1920, height: 1080) }
+
+        _ = try ProPresenterPackage.package(
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
+        )
+        let first = try stagedFiles(of: deck.group, in: showRoot)
+
+        _ = try ProPresenterPackage.package(
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
+        )
+        let second = try stagedFiles(of: deck.group, in: showRoot)
+
+        XCTAssertEqual(second.count, first.count, "a rebuild replaces its staging rather than joining it")
+        for (name, url) in second {
+            XCTAssertEqual(
+                try inode(of: url), try inode(of: try XCTUnwrap(first[name])),
+                "\(name) was written afresh rather than linked to the deck's own file"
+            )
+        }
+    }
+
+    /// The hard link is not decoration: it is the difference between naming the
+    /// deck's bytes and holding a second copy of them.
+    func testStagedMediaNamesTheDecksBytesRatherThanCopyingThem() throws {
+        let deck = try makeDeck(imageCount: 1)
+        defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
+
+        _ = try ProPresenterPackage.package(
+            group: deck.group,
+            destinationDirectory: try makeTemporaryDirectory(),
+            showRoot: showRoot,
+            pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
+        )
+
+        let image = deck.group.imageURLs[0]
+        let staged = try XCTUnwrap(stagedFiles(of: deck.group, in: showRoot)[image.lastPathComponent])
+        XCTAssertEqual(try inode(of: staged), try inode(of: image), "one inode, two names")
+        XCTAssertEqual(try Data(contentsOf: staged), try Data(contentsOf: image))
+    }
+
+    /// A ProPresenter library on another volume cannot hold a hard link to the
+    /// bin, so the image is copied there instead. The bytes cost more; the
+    /// presentation still resolves, which is the part that matters.
+    func testPackagingFallsBackToCopyingWhenLinkingFails() throws {
+        let deck = try makeDeck(imageCount: 1)
+        defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
+
+        _ = try ProPresenterPackage.package(
+            group: deck.group,
+            destinationDirectory: out,
+            showRoot: showRoot,
+            pixelSize: { _ in PixelSize(width: 1920, height: 1080) },
+            linkMedia: { _, _ in throw ProPackageError.stageFailed("no link across volumes") }
+        )
+
+        let image = deck.group.imageURLs[0]
+        let staged = try XCTUnwrap(stagedFiles(of: deck.group, in: showRoot)[image.lastPathComponent])
+        XCTAssertEqual(try Data(contentsOf: staged), try Data(contentsOf: image))
+    }
+
+    /// ProSlide never creates ProPresenter's library. A `Media/Imported` tree
+    /// anywhere else is media nothing will read, so the deck is left alone and
+    /// the card reports why it fell back to dragging its JPEG folder.
+    func testPackagingReportsAMissingProPresenterFolder() throws {
+        let deck = try makeDeck(imageCount: 2)
+        defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
+
+        // Inside a folder that exists, but with no ProPresenter library in it.
+        let showRoot = out.appendingPathComponent("Not Installed/ProPresenter")
+
+        XCTAssertThrowsError(
+            try ProPresenterPackage.package(
+                group: deck.group,
+                destinationDirectory: out,
+                showRoot: showRoot,
+                pixelSize: { _ in PixelSize(width: 1920, height: 1080) }
+            )
+        ) { error in
+            XCTAssertEqual(error as? ProPackageError, .showRootUnavailable(showRoot.path))
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: showRoot.path),
+            "a missing library must not be created"
+        )
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: out.path), [],
+            "and nothing is written at all when there is nowhere to stage media"
         )
     }
 
@@ -657,7 +801,8 @@ final class ProPresenterPackageTests: XCTestCase {
 
     /// The ProPresenter document root the fixture-shaped manifests name media
     /// against. Injecting it keeps expectations independent of whoever runs the
-    /// suite, and makes the `..` segments visible in the expected paths.
+    /// suite. The manifests built against it are pure — the packager is what
+    /// touches the disk, and it is given a real root.
     private var fixtureShow: URL { URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter") }
 
     private struct Deck {
@@ -672,6 +817,17 @@ final class ProPresenterPackageTests: XCTestCase {
         return folder
     }
 
+    /// A stand-in for ProPresenter's document root.
+    ///
+    /// A real folder, because the packager stages media into it, and deliberately
+    /// under the same temporary root as the decks so a hard link between the two
+    /// is possible without permissions to write anywhere else.
+    private func makeShowRoot(named: String = "ProPresenter") throws -> URL {
+        let show = try makeTemporaryDirectory().appendingPathComponent(named, isDirectory: true)
+        try FileManager.default.createDirectory(at: show, withIntermediateDirectories: true)
+        return show
+    }
+
     private func makeDeck(imageCount: Int) throws -> Deck {
         let folder = try makeTemporaryDirectory()
         for index in 1...imageCount {
@@ -682,6 +838,38 @@ final class ProPresenterPackageTests: XCTestCase {
         let group = ConversionGroup(sourceName: "Sample Deck JPEGs", folderURL: folder)
         XCTAssertEqual(group.imageURLs.count, imageCount, "images must sort into page order")
         return Deck(folder: folder, group: group)
+    }
+
+    /// Every staged file for a deck, keyed by filename.
+    ///
+    /// Read off disk rather than recomputed: where the packager put the deck is
+    /// part of what is being checked, so the helper asks the same function
+    /// production does and then looks.
+    private func stagedFiles(of group: ConversionGroup, in showRoot: URL) throws -> [String: URL] {
+        let deck = ProPresenterPackage.stagedMediaDirectory(for: group, in: showRoot)
+        let items = try FileManager.default.contentsOfDirectory(atPath: deck.path)
+        XCTAssertEqual(items.count, 1, "one media item per packaging")
+        let item = deck.appendingPathComponent(items[0], isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(at: item, includingPropertiesForKeys: nil)
+        return Dictionary(uniqueKeysWithValues: files.map { ($0.lastPathComponent, $0) })
+    }
+
+    /// The manifest-relative path of one staged image: `Media/Imported/…`, the
+    /// deck's folder inside ProPresenter's media tree, the media item's, and the
+    /// image's own name.
+    private func stagedPath(of group: ConversionGroup, image: String, in showRoot: URL) throws -> String {
+        let deck = ProPresenterPackage.stagedMediaDirectory(for: group, in: showRoot)
+        let items = try FileManager.default.contentsOfDirectory(atPath: deck.path)
+        XCTAssertEqual(items.count, 1, "one media item per packaging")
+        return "Media/Imported/\(deck.lastPathComponent)/\(items[0])/\(image)"
+    }
+
+    /// A file's inode number, which two hard-linked names for the same bytes
+    /// share and two separate copies do not.
+    private func inode(of url: URL) throws -> UInt64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let number = try XCTUnwrap(attributes[.systemFileNumber] as? NSNumber)
+        return number.uint64Value
     }
 
     /// `real.pro`, a presentation ProPresenter exported itself with media in it.

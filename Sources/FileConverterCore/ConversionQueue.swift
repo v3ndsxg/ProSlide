@@ -34,9 +34,9 @@ public final class ConversionQueue: ObservableObject {
     /// Which of the two card-drag payloads the bin offers.
     ///
     /// Deliberately not a toggle that controls writing: presentations are always
-    /// written to every deck, because the `.pro` is a few hundred bytes of
-    /// manifest and there is nothing to save by deferring it. Switching modes is
-    /// therefore instant and cannot leave a stale file behind.
+    /// written to every deck, because a presentation is a small manifest plus one
+    /// hard link per slide, and there is nothing to save by deferring it.
+    /// Switching modes is therefore instant and cannot leave a stale file behind.
     @Published public var dragMode: DragMode = .presentation
 
     /// Built presentations, keyed by deck folder path. Populated in the
@@ -342,16 +342,24 @@ public final class ConversionQueue: ObservableObject {
     }
 
     /// Empties the bin: every converted document, plus the `.pro` written for each
-    /// one.
+    /// one, plus the media staged into ProPresenter's tree for it.
     ///
     /// Presentations live in their own folder rather than inside each document's,
-    /// so that folder has to go too or Clear would leave them behind.
+    /// so that folder has to go too or Clear would leave them behind — and the
+    /// staged links have to go with it, or ProPresenter's media folder keeps a
+    /// name for every slide after the deck that produced them is gone.
     public func clearBin() throws {
         presentationTask?.cancel()
         presentations = [:]
         presentationFailures = [:]
         for folder in groups.map(\.folderURL) {
             try FileManager.default.removeItem(at: folder)
+        }
+        let showRoot = ProPresenterInstallation.defaultDocumentRoot
+        for group in groups {
+            try? FileManager.default.removeItem(
+                at: ProPresenterPackage.stagedMediaDirectory(for: group, in: showRoot)
+            )
         }
         // `try?`: the folder may never have been created, and failing to clear a
         // bin because of that would be worse than leaving it.

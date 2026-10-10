@@ -54,9 +54,7 @@ public enum BinStorage {
     /// holds JPEGs and nothing else.
     ///
     /// A sibling of `Bin` rather than a subfolder, so `scanBin` cannot mistake it
-    /// for a deck. It is safe to keep them apart because media paths in a `.pro`
-    /// are relative to the home folder, not to the `.pro` itself, so the file does
-    /// not need to sit beside its images.
+    /// for a deck.
     public static var presentationsDirectory: URL {
         let presentations = rootURL.deletingLastPathComponent()
             .appendingPathComponent("Pro", isDirectory: true)
@@ -165,12 +163,19 @@ public struct ProSlide: Equatable, Sendable {
 public enum ProPackageError: LocalizedError, Equatable {
     case noImages(String)
     case unreadableImage(String)
+    case showRootUnavailable(String)
+    case stageFailed(String)
     case writeFailed(String)
 
     public var errorDescription: String? {
         switch self {
         case .noImages(let name): "\(name) has no JPEGs to package."
         case .unreadableImage(let name): "The size of \(name) could not be read."
+        case .showRootUnavailable(let path):
+            "ProPresenter's folder was not found at \(path). Open ProPresenter once, "
+                + "or move your library back, then Rebuild — the card drags its JPEG folder for now."
+        case .stageFailed(let name):
+            "\(name) could not be linked or copied into ProPresenter's media folder."
         case .writeFailed(let detail): "The presentation could not be written. \(detail)"
         }
     }

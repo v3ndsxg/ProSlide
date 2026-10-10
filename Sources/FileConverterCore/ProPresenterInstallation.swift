@@ -3,9 +3,10 @@ import Foundation
 /// Where ProPresenter keeps its documents, media and configuration.
 ///
 /// Media inside a `.pro` is named by a path relative to this root, using
-/// `ROOT_USER_SHOW`, so a presentation can only be resolved by knowing it.
-/// ProPresenter's default is `~/Documents/ProPresenter`, but it is configurable
-/// in the app, so the location is discovered rather than assumed.
+/// `ROOT_SHOW`, and ProSlide *links* its decks into this root's `Media` tree so
+/// the names resolve. ProPresenter's default is `~/Documents/ProPresenter`, but
+/// it is configurable in the app, so the location is discovered rather than
+/// assumed.
 public enum ProPresenterInstallation {
     /// ProPresenter's document root: the folder holding `Libraries`, `Media`
     /// and `Configuration`.
@@ -32,13 +33,28 @@ public enum ProPresenterInstallation {
 
     /// Whether ProPresenter appears to be installed at all.
     ///
-    /// Unused for now: media paths are written relative to the document root
-    /// either way, and if the root turns out to be wrong the presentation simply
-    /// shows placeholders. A warning in the UI would be more alarming than
-    /// helpful, since the JPEG Folder option works regardless.
+    /// Unused for now: a deck's presentation is attempted either way, and a
+    /// missing library is reported when the staging has somewhere to write to —
+    /// which is the only point it can be judged. The JPEG Folder drag works
+    /// regardless.
     public static var isInstalled: Bool {
         FileManager.default.fileExists(atPath: fallbackDocumentRoot.path)
             || configuredDocumentRoot() != nil
+    }
+
+    /// Whether ProSlide may stage a deck's media into `root`: it exists, it is a
+    /// folder, and it accepts new files.
+    ///
+    /// ProSlide never creates this folder. A `Media/Imported` tree anywhere else
+    /// is media nobody will read, so a root that is not already there is
+    /// reported rather than quietly built — the alternative is a presentation
+    /// full of placeholders with no explanation attached.
+    public static func isUsable(root: URL) -> Bool {
+        var isFolder: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isFolder),
+              isFolder.boolValue
+        else { return false }
+        return FileManager.default.isWritableFile(atPath: root.path)
     }
 
     private static func configuredDocumentRoot() -> URL? {
