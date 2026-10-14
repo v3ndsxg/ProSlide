@@ -397,15 +397,28 @@ final class ProPresenterPackageTests: XCTestCase {
         let actions = try XCTUnwrap(presentation.message(13)).messages(10)
         let element = try XCTUnwrap(mediaElement(of: actions[0]))
 
-        let direct = try XCTUnwrap(try XCTUnwrap(element.message(2)).message(4))
-        let viaFile = try XCTUnwrap(
+        // The two URL messages, and the `local` submessage nested in each. The
+        // absolute URL is field 1 of the URL itself; the root and the path live
+        // in the `local` at field 4. Asking the `local` for a string at field 1
+        // finds the root enum instead, which is why the two have to be unwrapped
+        // separately rather than walked to once.
+        let mediaURL = try XCTUnwrap(element.message(2))
+        let fileURL = try XCTUnwrap(
             try XCTUnwrap(try XCTUnwrap(element.message(5)).message(2)).message(1)
-        ).message(4)
-        let fileLocal = try XCTUnwrap(viaFile)
+        )
+        let mediaLocal = try XCTUnwrap(mediaURL.message(4))
+        let fileLocal = try XCTUnwrap(fileURL.message(4))
 
-        XCTAssertEqual(direct.string(2), try XCTUnwrap(fileLocal.string(2)), "same file")
-        XCTAssertEqual(direct.uint(1), try XCTUnwrap(fileLocal.uint(1)), "same root")
-        XCTAssertEqual(direct.string(1), try XCTUnwrap(fileLocal.string(1)), "same absolute URL")
+        XCTAssertEqual(mediaLocal.string(2), fileLocal.string(2), "same file")
+        XCTAssertEqual(mediaLocal.uint(1), fileLocal.uint(1), "same root")
+        XCTAssertEqual(mediaURL.string(1), fileURL.string(1), "same absolute URL")
+
+        // And they carry the same fields, which is how `real.pro` records both:
+        // absolute string, platform, local. Reading `real.pro` back gives
+        // `10.23.2.1.1.1.9.3.2` and `10.23.2.1.1.1.9.3.5.2.1` the identical
+        // set, and the identical absolute string.
+        XCTAssertEqual(mediaURL.map(\.number).sorted(), fileURL.map(\.number).sorted())
+        XCTAssertEqual(mediaURL.map(\.number).sorted(), [1, 3, 4])
     }
 
     func testEmptyDeckStillDescribesAReadableDocument() throws {
@@ -666,16 +679,27 @@ final class ProPresenterPackageTests: XCTestCase {
         )
         let first = try stagedFiles(of: deck.group, in: showRoot)
 
+        // Two more builds. Staging is replaced rather than joined, so the first
+        // media item is gone by now — which is why nothing below compares
+        // against the URLs `first` captured.
+        _ = try ProPresenterPackage.package(
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
+        )
         _ = try ProPresenterPackage.package(
             group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
         )
         let second = try stagedFiles(of: deck.group, in: showRoot)
 
-        XCTAssertEqual(second.count, first.count, "a rebuild replaces its staging rather than joining it")
-        for (name, url) in second {
+        XCTAssertEqual(second.count, first.count, "three builds, still one link per slide")
+        XCTAssertEqual(Set(second.keys), Set(first.keys), "and the same slides")
+
+        // Whatever survives must be a live link to the deck's own file, not a
+        // copy, and not a leftover from a staging that no longer exists.
+        for image in deck.group.imageURLs {
+            let staged = try XCTUnwrap(second[image.lastPathComponent])
             XCTAssertEqual(
-                try inode(of: url), try inode(of: try XCTUnwrap(first[name])),
-                "\(name) was written afresh rather than linked to the deck's own file"
+                try inode(of: staged), try inode(of: image),
+                "\(image.lastPathComponent) was copied rather than linked"
             )
         }
     }
