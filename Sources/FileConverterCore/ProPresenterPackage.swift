@@ -147,9 +147,9 @@ public enum ProPresenterPackage {
 
     /// Links `image` to `staged`, falling back to a copy where the two cannot
     /// share an inode.
-    private static func place(_ image: URL, at staged: URL, link: MediaLinker) throws {
+    private static func place(_ image: URL, at staged: URL, linkMedia: MediaLinker) throws {
         do {
-            try link(image, staged)
+            try linkMedia(image, staged)
         } catch {
             try? FileManager.default.removeItem(at: staged)
             do {
