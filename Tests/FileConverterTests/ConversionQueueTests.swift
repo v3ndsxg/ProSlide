@@ -181,7 +181,7 @@ final class ConversionQueueTests: XCTestCase {
         let queue = ConversionQueue()
         XCTAssertEqual(queue.dragMode, .presentation)
 
-        let folder = try FileManager.default.temporaryDirectory
+        let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("ProSlideTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }

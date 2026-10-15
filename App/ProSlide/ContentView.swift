@@ -338,34 +338,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Drag
-
-/// Attaches a drag only when there is something to drag.
-///
-/// `onDrag` must return an item provider, so a view cannot simply decline. This
-/// lets a deck with nothing to offer be inert and visibly so, rather than
-/// quietly handing over a different payload behind the operator's back — which
-/// is what `ConversionQueue.dragPayload(for:)` used to permit.
-///
-/// One file or one folder, never a pile of loose images. A SwiftUI drag can only
-/// ever hand over a single `NSItemProvider`, so packing many URLs into one item
-/// does not arrive as many files: a receiver takes the first and you get one
-/// slide. Finder gets this right by writing one pasteboard item per file, which
-/// needs an AppKit drag session.
-private extension View {
-    @ViewBuilder
-    func draggable(on payload: URL?) -> some View {
-        if let payload {
-            self.onDrag {
-                NSItemProvider(contentsOf: payload) ?? NSItemProvider(object: payload as NSURL)
-            }
-        } else {
-            self
-        }
-    }
-}
-
-// MARK: - Drop
+    // MARK: - Drop
 
     /// Accepts every provider in the drop, not just the first. The load
     /// callbacks can fire in any order on any thread, so they are funnelled
@@ -400,5 +373,32 @@ private extension View {
             queue.accept(urls)
         }
         return true
+    }
+}
+
+// MARK: - Drag
+
+/// Attaches a drag only when there is something to drag.
+///
+/// `onDrag` must return an item provider, so a view cannot simply decline. This
+/// lets a deck with nothing to offer be inert and visibly so, rather than
+/// quietly handing over a different payload behind the operator's back — which
+/// is what `ConversionQueue.dragPayload(for:)` used to permit.
+///
+/// One file or one folder, never a pile of loose images. A SwiftUI drag can only
+/// ever hand over a single `NSItemProvider`, so packing many URLs into one item
+/// does not arrive as many files: a receiver takes the first and you get one
+/// slide. Finder gets this right by writing one pasteboard item per file, which
+/// needs an AppKit drag session.
+private extension View {
+    @ViewBuilder
+    func draggable(on payload: URL?) -> some View {
+        if let payload {
+            self.onDrag {
+                NSItemProvider(contentsOf: payload) ?? NSItemProvider(object: payload as NSURL)
+            }
+        } else {
+            self
+        }
     }
 }
