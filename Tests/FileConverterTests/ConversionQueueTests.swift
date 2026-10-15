@@ -197,6 +197,90 @@ final class ConversionQueueTests: XCTestCase {
         XCTAssertNotNil(queue.presentationFailures[group.id], "and the reason is kept for the bin to report")
     }
 
+    /// Decks converted before the bin moved out of Application Support must come
+    /// across rather than be abandoned — they were unreadable where they sat.
+    func testDecksAreBroughtAcrossFromTheOldBinLocation() throws {
+        let legacy = try makeScratchFolder("legacy")
+        let destination = try makeScratchFolder("new")
+        let deck = legacy.appendingPathComponent("Faith JPEGs", isDirectory: true)
+        try FileManager.default.createDirectory(at: deck, withIntermediateDirectories: true)
+        try Data("slide".utf8).write(to: deck.appendingPathComponent("Faith-001.jpg"))
+
+        // Something that is not a deck must be left where it is.
+        let notes = legacy.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+
+        BinStorage.migrateDecks(from: legacy, to: destination)
+
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: destination.path), ["Faith JPEGs"]
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: deck.path), "the deck moves, it is not copied"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: notes.path),
+            "a folder holding no images is not a deck and stays put"
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: destination.appendingPathComponent("Faith JPEGs/Faith-001.jpg")),
+            Data("slide".utf8), "and the images arrive intact"
+        )
+    }
+
+    /// Re-running must be harmless: the second pass finds a deck already at the
+    /// destination and must not touch either copy.
+    func testMigratingTwiceOverwritesNothing() throws {
+        let legacy = try makeScratchFolder("legacy")
+        let destination = try makeScratchFolder("new")
+        let deck = legacy.appendingPathComponent("Faith JPEGs", isDirectory: true)
+        try FileManager.default.createDirectory(at: deck, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: deck.appendingPathComponent("Faith-001.jpg"))
+
+        BinStorage.migrateDecks(from: legacy, to: destination)
+
+        // Someone re-converts, producing a newer deck under the same name.
+        let fresh = destination.appendingPathComponent("Faith JPEGs", isDirectory: true)
+        try Data("new".utf8).write(to: fresh.appendingPathComponent("Faith-001.jpg"))
+
+        BinStorage.migrateDecks(from: legacy, to: destination)
+
+        XCTAssertEqual(
+            try Data(contentsOf: fresh.appendingPathComponent("Faith-001.jpg")), Data("new".utf8),
+            "the deck already at the destination is left exactly as it is"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: deck.path),
+            "and the stale original is still there rather than clobbering anything"
+        )
+    }
+
+    /// The bin must not live in Application Support. ProPresenter is handed these
+    /// paths and reads them itself; another app's container is not readable
+    /// without a permission the drag never grants, and every slide arrived in
+    /// ProPresenter empty.
+    func testTheBinIsWhereProPresenterCanReadIt() {
+        let path = BinStorage.rootURL.path
+        XCTAssertTrue(
+            path.contains("/Documents/"), "the bin is in Documents, got \(path)"
+        )
+        XCTAssertFalse(
+            path.contains("Application Support"), "and nowhere near a container, got \(path)"
+        )
+    }
+
+    /// A throwaway folder that removes itself.
+    ///
+    /// Named rather than reused so a test that forgets to clean up leaves an
+    /// obvious directory behind instead of quietly polluting the next run.
+    private func makeScratchFolder(_ label: String) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ProSlideTests-\(label)-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        return folder
+    }
+
     // MARK: - Cancellation
 
     func testCancelStopsTheBatchAndLeavesNothingCommitted() async throws {

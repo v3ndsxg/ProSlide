@@ -253,7 +253,11 @@ public final class ConversionQueue: ObservableObject {
         let root = BinStorage.rootURL
         Task { [weak self] in
             let scanned = await Task.detached(priority: .utility) {
-                ConversionQueue.scanBin(at: root)
+                // Before the first scan of a fresh bin, bring across anything
+                // left in the old Application Support location, where
+                // ProPresenter could never read it.
+                BinStorage.migrateLegacyBin(to: root)
+                return ConversionQueue.scanBin(at: root)
             }.value
             self?.groups = scanned
             self?.rebuildPresentations()

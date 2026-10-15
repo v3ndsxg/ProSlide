@@ -37,12 +37,74 @@ public enum DragMode: String, CaseIterable, Identifiable, Sendable {
 }
 
 public enum BinStorage {
+    /// Where converted documents are written.
+    ///
+    /// Under **Documents**, not Application Support, and that is the whole point.
+    ///
+    /// ProPresenter is handed these paths and reads them itself, without any
+    /// permission the drag granted to ProSlide. Paths inside
+    /// `~/Library/Application Support/…` look like the sort of thing any app can
+    /// read and are not: that is another app's container, and macOS will not let
+    /// ProPresenter into it. Every slide arrived in ProPresenter as an empty
+    /// placeholder, and a deck exported afterwards came back as cues carrying no
+    /// action at all — nine slides, no content, which is what a presentation
+    /// looks like when none of its media could be opened.
+    ///
+    /// Documents is also where a person looks for their slides, so it is the
+    /// better home regardless.
     public static var rootURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("FileConverter", isDirectory: true)
-        let bin = base.appendingPathComponent("Bin", isDirectory: true)
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("ProSlide", isDirectory: true)
+        let bin = documents.appendingPathComponent("Bin", isDirectory: true)
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         return bin
+    }
+
+    /// Where the bin used to live, kept only so decks converted there can be
+    /// brought across instead of being abandoned.
+    public static var legacyRootURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("FileConverter", isDirectory: true)
+            .appendingPathComponent("Bin", isDirectory: true)
+    }
+
+    public static func migrateLegacyBin(to destination: URL) {
+        migrateDecks(from: legacyRootURL, to: destination)
+    }
+
+    /// Moves any decks still sitting in `legacy` into `destination`.
+    ///
+    /// A move rather than a copy: both are on the same volume, so this is a
+    /// rename per deck and costs no extra space. Decks are handled one at a time,
+    /// so a failure part-way through costs one deck rather than the bin, and
+    /// nothing is ever copied or overwritten — a deck already present at the
+    /// destination is left alone and its original stays where it was.
+    ///
+    /// `legacy` is a parameter rather than read from `legacyRootURL` so this can
+    /// be exercised against temporary folders. A test that moved the real ones
+    /// would be a test that rearranged the user's work.
+    ///
+    /// Runs on every scan. Once the decks have moved, the old folder holds
+    /// nothing that looks like a deck and this does nothing at all.
+    public static func migrateDecks(from legacy: URL, to destination: URL) {
+        guard legacy != destination,
+              let entries = try? FileManager.default.contentsOfDirectory(
+                atPath: legacy.path, includingPropertiesForKeys: nil
+              )
+        else { return }
+
+        for name in entries {
+            let from = legacy.appendingPathComponent(name)
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: from.path, isDirectory: &isFolder),
+                  isFolder.boolValue,
+                  !ConversionGroup.exportedImages(in: from).isEmpty
+            else { continue }
+
+            let to = destination.appendingPathComponent(name)
+            guard !FileManager.default.fileExists(atPath: to.path) else { continue }
+            try? FileManager.default.moveItem(at: from, to: to)
+        }
     }
 
     /// Where the `.pro` files are written.
