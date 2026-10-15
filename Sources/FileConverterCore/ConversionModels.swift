@@ -89,21 +89,20 @@ public enum BinStorage {
     public static func migrateDecks(from legacy: URL, to destination: URL) {
         guard legacy != destination,
               let entries = try? FileManager.default.contentsOfDirectory(
-                atPath: legacy.path, includingPropertiesForKeys: nil
+                at: legacy, includingPropertiesForKeys: nil
               )
         else { return }
 
-        for name in entries {
-            let from = legacy.appendingPathComponent(name)
-            var isFolder: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: from.path, isDirectory: &isFolder),
-                  isFolder.boolValue,
-                  !ConversionGroup.exportedImages(in: from).isEmpty
-            else { continue }
+        for entry in entries where entry.hasDirectoryPath {
+            // Only a folder holding images is a deck. Anything else in the old
+            // bin was never ours to move.
+            guard !ConversionGroup.exportedImages(in: entry).isEmpty else { continue }
 
-            let to = destination.appendingPathComponent(name)
+            let to = destination.appendingPathComponent(entry.lastPathComponent)
+            // Never overwrite. A deck already at the destination wins, and its
+            // stale original stays put rather than being clobbered or deleted.
             guard !FileManager.default.fileExists(atPath: to.path) else { continue }
-            try? FileManager.default.moveItem(at: from, to: to)
+            try? FileManager.default.moveItem(at: entry, to: to)
         }
     }
 

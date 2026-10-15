@@ -228,20 +228,23 @@ final class ConversionQueueTests: XCTestCase {
         )
     }
 
-    /// Re-running must be harmless: the second pass finds a deck already at the
-    /// destination and must not touch either copy.
-    func testMigratingTwiceOverwritesNothing() throws {
+    /// A deck already at the destination must survive migration untouched.
+    ///
+    /// Arranged by putting a deck in both places at once, which is what a
+    /// re-conversion after a partial migration leaves behind. Simply migrating
+    /// twice would prove nothing: the first pass moves the deck away, so the
+    /// second finds nothing to do and never meets the collision.
+    func testMigrationNeverOverwritesADeckAlreadyAtTheDestination() throws {
         let legacy = try makeScratchFolder("legacy")
         let destination = try makeScratchFolder("new")
-        let deck = legacy.appendingPathComponent("Faith JPEGs", isDirectory: true)
-        try FileManager.default.createDirectory(at: deck, withIntermediateDirectories: true)
-        try Data("old".utf8).write(to: deck.appendingPathComponent("Faith-001.jpg"))
 
-        BinStorage.migrateDecks(from: legacy, to: destination)
-
-        // Someone re-converts, producing a newer deck under the same name.
         let fresh = destination.appendingPathComponent("Faith JPEGs", isDirectory: true)
+        try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
         try Data("new".utf8).write(to: fresh.appendingPathComponent("Faith-001.jpg"))
+
+        let stale = legacy.appendingPathComponent("Faith JPEGs", isDirectory: true)
+        try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: stale.appendingPathComponent("Faith-001.jpg"))
 
         BinStorage.migrateDecks(from: legacy, to: destination)
 
@@ -250,8 +253,8 @@ final class ConversionQueueTests: XCTestCase {
             "the deck already at the destination is left exactly as it is"
         )
         XCTAssertTrue(
-            FileManager.default.fileExists(atPath: deck.path),
-            "and the stale original is still there rather than clobbering anything"
+            FileManager.default.fileExists(atPath: stale.path),
+            "and the stale original is left where it is rather than clobbering anything"
         )
     }
 
