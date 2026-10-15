@@ -227,14 +227,22 @@ struct ContentView: View {
         switch queue.dragMode {
         case .jpegFolder:
             var hint = "Each card drags its JPEG folder, so ProPresenter brings in every slide at once."
-            if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
-                hint += " Presentations are being written in the background."
+            if !queue.presentationFailureMessages.isEmpty {
+                hint += " "
+                hint += queue.presentationFailureSummary
             }
             return hint
         case .presentation:
             var hint = "Each card drags the deck's .pro, which opens as one named presentation with every slide attached. Presentations are kept in their own folder — use Presentations to find them. ProSlide links each deck's images into ProPresenter's own media folder, so no space is spent twice."
             if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
-                hint += " They are written in the background, so a card still being written drags its JPEG folder instead."
+                hint += " They are written in the background, so a card still being written does not drag yet."
+            }
+            // Failures are stated here, in full. A card caption nobody reads
+            // about a presentation that silently never existed is how six
+            // commits of writer work went untested.
+            if !queue.presentationFailureMessages.isEmpty {
+                hint += " "
+                hint += queue.presentationFailureSummary
             }
             return hint
         }
@@ -247,9 +255,20 @@ struct ContentView: View {
     /// one item does not arrive as many files — a receiver takes the first and
     /// you get one slide. Finder gets this right by writing one pasteboard item
     /// per file, which needs an AppKit drag session.
-    private func cardDragItem(for group: ConversionGroup) -> NSItemProvider {
-        let payload = queue.dragPayload(for: group)
-        return NSItemProvider(contentsOf: payload) ?? NSItemProvider(object: payload as NSURL)
+    /// Attaches the drag only when there is something to drag.
+    ///
+    /// `onDrag` has to return a provider, so a deck with nothing to offer cannot
+    /// simply decline. Splitting the card lets a presentation that was never
+    /// written be inert and visibly so, instead of quietly handing over a
+    /// different payload behind the operator's back.
+    private func draggableCard<Content: View>(_ content: Content, for group: ConversionGroup) -> some View {
+        if let payload = queue.dragPayload(for: group) {
+            content.onDrag {
+                NSItemProvider(contentsOf: payload) ?? NSItemProvider(object: payload as NSURL)
+            }
+        } else {
+            content
+        }
     }
 
     private func binGroup(_ group: ConversionGroup) -> some View {
@@ -296,7 +315,7 @@ struct ContentView: View {
         // padding and empty space around the content draggable too, rather
         // than only the text and thumbnails.
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onDrag { cardDragItem(for: group) }
+        .draggableCard(for: group)
     }
 
     private func cardDragIcon(for group: ConversionGroup) -> String {

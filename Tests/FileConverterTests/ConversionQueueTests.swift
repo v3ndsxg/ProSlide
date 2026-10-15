@@ -151,6 +151,10 @@ final class ConversionQueueTests: XCTestCase {
     /// default because it is the reason the deck is packaged at all, but the
     /// folder has to stay reachable — it is what you want when pulling slides
     /// into a presentation you already have.
+    ///
+    /// Presentation mode has no fallback: a deck with no presentation drags
+    /// nothing at all, rather than quietly handing over its JPEG folder. The
+    /// fallback is what made a failed `.pro` look like a working drag.
     func testDragModeDefaultsToThePresentationAndCanSwitchToTheFolder() {
         let queue = ConversionQueue()
         XCTAssertEqual(queue.dragMode, .presentation)
@@ -160,15 +164,37 @@ final class ConversionQueueTests: XCTestCase {
             folderURL: URL(fileURLWithPath: "/tmp/Deck JPEGs", isDirectory: true)
         )
 
-        // With nothing written yet, both modes fall back to the folder so a drag
-        // is never a no-op.
-        XCTAssertEqual(queue.dragPayload(for: group), group.folderURL)
+        // Nothing written yet, so presentation mode has nothing to offer.
+        XCTAssertNil(queue.dragPayload(for: group))
 
         queue.dragMode = .jpegFolder
         XCTAssertEqual(queue.dragPayload(for: group), group.folderURL)
 
         queue.dragMode = .presentation
-        XCTAssertEqual(queue.dragPayload(for: group), group.folderURL)
+        XCTAssertNil(queue.dragPayload(for: group))
+    }
+
+    /// A deck whose presentation failed to write must not drag as a JPEG folder
+    /// either. The two payloads behave differently in ProPresenter, and swapping
+    /// one for the other without saying so is what made this so hard to see.
+    func testAFailedPresentationNeverDragsTheJPEGFolderInstead() throws {
+        let queue = ConversionQueue()
+        XCTAssertEqual(queue.dragMode, .presentation)
+
+        let folder = try FileManager.default.temporaryDirectory
+            .appendingPathComponent("ProSlideTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("x".utf8).write(to: folder.appendingPathComponent("Deck-001.jpg"))
+
+        let group = ConversionGroup(sourceName: "Deck JPEGs", folderURL: folder)
+        queue.recordPresentationFailure("ProPresenter's folder was not found.", for: group)
+
+        XCTAssertNil(
+            queue.dragPayload(for: group),
+            "a failed presentation must not quietly become a JPEG-folder drag"
+        )
+        XCTAssertNotNil(queue.presentationFailures[group.id], "and the reason is kept for the bin to report")
     }
 
     // MARK: - Cancellation

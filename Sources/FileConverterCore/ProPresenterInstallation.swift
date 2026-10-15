@@ -4,25 +4,48 @@ import Foundation
 ///
 /// Media inside a `.pro` is named by a path relative to this root, using
 /// `ROOT_SHOW`, and ProSlide *links* its decks into this root's `Media` tree so
-/// the names resolve. ProPresenter's default is `~/Documents/ProPresenter`, but
-/// it is configurable in the app, so the location is discovered rather than
-/// assumed.
+/// the names resolve. ProPresenter puts its library in `~/Documents/ProPresenter`
+/// by default, but it is configurable in the app, so the location is discovered
+/// rather than assumed.
 public enum ProPresenterInstallation {
     /// ProPresenter's document root: the folder holding `Libraries`, `Media`
     /// and `Configuration`.
     ///
-    /// Discovery order:
+    /// The first candidate that actually exists wins; if none do, the macOS
+    /// default is returned so the caller can report it by name.
+    ///
+    /// Candidates, in order:
     ///
     /// 1. `PathSettings.proPaths`, which records `Base=<path>` and is what
-    ///    ProPresenter itself reads on Windows. Cheap to check, and authoritative
-    ///    when the user has moved their installation.
+    ///    ProPresenter itself reads on Windows. Authoritative when the user has
+    ///    moved their installation.
     /// 2. `~/Documents/ProPresenter`, the macOS default.
+    /// 3. `~/Library/Application Support/ProPresenter`, for installations that
+    ///    keep their library in the application-support area instead.
     ///
-    /// Nothing is created and nothing is written: a missing installation simply
-    /// yields the default, which is where a fresh install puts it.
+    /// Earlier this returned only the first two, and guessed at the rest. A wrong
+    /// guess does not fail loudly here: `isUsable` refuses it, the packaging is
+    /// abandoned, and the card quietly dragged its JPEG folder instead. Nothing
+    /// was ever written, and it read exactly like a `.pro` that worked.
     public static var defaultDocumentRoot: URL {
-        if let configured = configuredDocumentRoot() { return configured }
-        return fallbackDocumentRoot
+        candidates().first(where: isDirectory) ?? fallbackDocumentRoot
+    }
+
+    /// Every place ProPresenter's document root is looked for, in order.
+    public static func candidates() -> [URL] {
+        var found: [URL] = []
+        if let configured = configuredDocumentRoot() { found.append(configured) }
+        found.append(fallbackDocumentRoot)
+        if let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            found.append(support.appendingPathComponent("ProPresenter", isDirectory: true))
+        }
+        return found
+    }
+
+    private static func isDirectory(_ url: URL) -> Bool {
+        var isFolder: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isFolder)
+            && isFolder.boolValue
     }
 
     /// `~/Documents/ProPresenter`, ProPresenter's stock macOS location.

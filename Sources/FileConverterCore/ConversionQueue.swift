@@ -272,16 +272,25 @@ public final class ConversionQueue: ObservableObject {
 
     // MARK: - ProPresenter presentations
 
-    /// What a card drag hands over, given the mode. Falls back to the JPEG
-    /// folder when the presentation is not written yet, so a drag is never a
-    /// no-op — including for a deck whose presentation failed to write, which is
-    /// why this ignores the reason for its absence.
-    public func dragPayload(for group: ConversionGroup) -> URL {
+    /// The payload for dragging a whole document into ProPresenter, or nil when
+    /// there is nothing to drag.
+    ///
+    /// In presentation mode there is deliberately **no** fallback to the JPEG
+    /// folder. One existed, and it was harmful: a deck whose presentation could
+    /// not be written dragged its JPEG folder instead, which is a different
+    /// payload producing a different result in ProPresenter. The two were
+    /// indistinguishable from the outside, so a `.pro` that failed to be written
+    /// at all looked exactly like a working drag — and six commits of work on the
+    /// writer went untested because of it.
+    ///
+    /// A drag that does nothing is a legible failure; a drag that silently does
+    /// something else is not.
+    public func dragPayload(for group: ConversionGroup) -> URL? {
         switch dragMode {
         case .jpegFolder:
             return group.folderURL
         case .presentation:
-            return presentation(for: group) ?? group.folderURL
+            return presentation(for: group)
         }
     }
 
@@ -300,9 +309,21 @@ public final class ConversionQueue: ObservableObject {
             guard let self else { return }
             switch await result.value {
             case .success(let url): presentations[group.id] = url
-            case .failure(let error): presentationFailures[group.id] = Self.message(for: error)
+            case .failure(let error): recordPresentationFailure(Self.message(for: error), for: group)
             }
         }
+    }
+
+    /// Records why a deck's presentation could not be written.
+    ///
+    /// Split out from the write itself so the failure path can be exercised
+    /// directly. Provoking a genuine failure — a missing ProPresenter library, or
+    /// a denied write — is the only way to prove a failure is *reported* rather
+    /// than swallowed, and that cannot be arranged on demand. The silent
+    /// fallback this now backs was itself caused by nobody testing it.
+    public func recordPresentationFailure(_ message: String, for group: ConversionGroup) {
+        presentations[group.id] = nil
+        presentationFailures[group.id] = message
     }
 
     /// Writes a presentation for every deck that does not have a current one.
@@ -320,10 +341,36 @@ public final class ConversionQueue: ObservableObject {
                 }.value
                 switch result {
                 case .success(let url): presentations[group.id] = url
-                case .failure(let error): presentationFailures[group.id] = Self.message(for: error)
+                case .failure(let error): recordPresentationFailure(Self.message(for: error), for: group)
                 }
             }
         }
+    }
+
+    /// Every deck whose presentation could not be written, with its reason.
+    ///
+    /// Ordered as the bin shows them, so the bin can report the first failure in
+    /// full rather than counting them and leaving the operator to go hunting
+    /// through the cards for which one went wrong.
+    public var presentationFailureMessages: [(group: ConversionGroup, message: String)] {
+        groups.compactMap { group in
+            presentationFailures[group.id].map { (group, $0) }
+        }
+    }
+
+    /// One sentence naming how many decks could not be written and why the first
+    /// one could not.
+    ///
+    /// The reason matters more than the count. "ProPresenter's folder was not
+    /// found at …" tells the operator what to go and fix; a bare count tells them
+    /// only that something is wrong somewhere.
+    public var presentationFailureSummary: String {
+        let failures = presentationFailureMessages
+        guard let first = failures.first else { return "" }
+        if failures.count == 1 {
+            return "1 deck could not be written: \(first.message) Its card does not drag."
+        }
+        return "\(failures.count) decks could not be written. The first: \(first.message) Those cards do not drag."
     }
 
     private static func message(for error: Error) -> String {
