@@ -256,29 +256,6 @@ struct ContentView: View {
         }
     }
 
-    /// The payload for dragging a whole document into ProPresenter.
-    ///
-    /// One file or one folder, never a pile of loose images. A SwiftUI drag can
-    /// only ever hand over a single `NSItemProvider`, so packing many URLs into
-    /// one item does not arrive as many files — a receiver takes the first and
-    /// you get one slide. Finder gets this right by writing one pasteboard item
-    /// per file, which needs an AppKit drag session.
-    /// Attaches the drag only when there is something to drag.
-    ///
-    /// `onDrag` has to return a provider, so a deck with nothing to offer cannot
-    /// simply decline. Splitting the card lets a presentation that was never
-    /// written be inert and visibly so, instead of quietly handing over a
-    /// different payload behind the operator's back.
-    private func draggableCard<Content: View>(_ content: Content, for group: ConversionGroup) -> some View {
-        if let payload = queue.dragPayload(for: group) {
-            content.onDrag {
-                NSItemProvider(contentsOf: payload) ?? NSItemProvider(object: payload as NSURL)
-            }
-        } else {
-            content
-        }
-    }
-
     private func binGroup(_ group: ConversionGroup) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -323,7 +300,7 @@ struct ContentView: View {
         // padding and empty space around the content draggable too, rather
         // than only the text and thumbnails.
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .draggableCard(for: group)
+        .draggable(on: queue.dragPayload(for: group))
     }
 
     /// Names what the button will actually save.
@@ -361,7 +338,34 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Drop
+    // MARK: - Drag
+
+/// Attaches a drag only when there is something to drag.
+///
+/// `onDrag` must return an item provider, so a view cannot simply decline. This
+/// lets a deck with nothing to offer be inert and visibly so, rather than
+/// quietly handing over a different payload behind the operator's back — which
+/// is what `ConversionQueue.dragPayload(for:)` used to permit.
+///
+/// One file or one folder, never a pile of loose images. A SwiftUI drag can only
+/// ever hand over a single `NSItemProvider`, so packing many URLs into one item
+/// does not arrive as many files: a receiver takes the first and you get one
+/// slide. Finder gets this right by writing one pasteboard item per file, which
+/// needs an AppKit drag session.
+private extension View {
+    @ViewBuilder
+    func draggable(on payload: URL?) -> some View {
+        if let payload {
+            self.onDrag {
+                NSItemProvider(contentsOf: payload) ?? NSItemProvider(object: payload as NSURL)
+            }
+        } else {
+            self
+        }
+    }
+}
+
+// MARK: - Drop
 
     /// Accepts every provider in the drop, not just the first. The load
     /// callbacks can fire in any order on any thread, so they are funnelled
