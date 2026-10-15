@@ -162,6 +162,7 @@ public struct ProSlide: Equatable, Sendable {
 
 public enum ProPackageError: LocalizedError, Equatable {
     case noImages(String)
+    case noPresentation(String)
     case unreadableImage(String)
     case showRootUnavailable(String)
     case stageFailed(String)
@@ -170,6 +171,9 @@ public enum ProPackageError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .noImages(let name): "\(name) has no JPEGs to package."
+        case .noPresentation(let name):
+            "\(name) has no presentation yet, so there is nothing to save. "
+                + "The bin says why if one could not be written."
         case .unreadableImage(let name): "The size of \(name) could not be read."
         case .showRootUnavailable(let path):
             "ProPresenter's folder was not found at \(path). Open ProPresenter once, "

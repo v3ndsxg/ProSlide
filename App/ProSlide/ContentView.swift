@@ -31,7 +31,15 @@ struct ContentView: View {
             guard case .success(let url) = result, let group = saveTarget else { return }
             saveTarget = nil
             do {
-                try queue.save(group: group, to: url)
+                // What is saved is what the card drags. It used to always be the
+                // JPEG folder, in presentation mode too -- beside a caption
+                // describing a different payload, which is how a working `.pro`
+                // came to be believed missing.
+                if queue.dragMode == .presentation {
+                    try queue.savePresentation(for: group, to: url)
+                } else {
+                    try queue.save(group: group, to: url)
+                }
             } catch {
                 queue.message = error.localizedDescription
             }
@@ -283,7 +291,7 @@ struct ContentView: View {
                     }
                 }
                 Button("Open") { BinOpener.open(group.folderURL) }
-                Button("Save…") { saveTarget = group; showingSaveImporter = true }
+                Button(saveLabel(for: group)) { saveTarget = group; showingSaveImporter = true }
             }
             HStack(spacing: 5) {
                 Image(systemName: cardDragIcon(for: group))
@@ -318,6 +326,20 @@ struct ContentView: View {
         .draggableCard(for: group)
     }
 
+    /// Names what the button will actually save.
+    ///
+    /// "Save…" sat next to a caption describing a presentation and handed over
+    /// loose JPEGs. A label that cannot be wrong about its own contents is the
+    /// cheapest fix for that.
+    private func saveLabel(for group: ConversionGroup) -> String {
+        switch queue.dragMode {
+        case .jpegFolder:
+            return "Save JPEGs…"
+        case .presentation:
+            return queue.presentation(for: group) == nil ? "No .pro yet" : "Save .pro…"
+        }
+    }
+
     private func cardDragIcon(for group: ConversionGroup) -> String {
         switch queue.dragMode {
         case .jpegFolder: return "folder.fill"
@@ -330,7 +352,7 @@ struct ContentView: View {
         case .jpegFolder:
             return "Drag this card into ProPresenter"
         case .presentation:
-            if let failure = queue.presentationFailures[group.id] {
+            if queue.presentation(for: group) == nil, let failure = queue.presentationFailures[group.id] {
                 return "Could not write the presentation: \(failure)"
             }
             return queue.presentation(for: group) == nil

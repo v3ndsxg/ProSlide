@@ -377,6 +377,14 @@ public final class ConversionQueue: ObservableObject {
         (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
+    /// Copies a deck's JPEGs into a folder the operator chose.
+    ///
+    /// Only correct in JPEG Folder mode. In presentation mode the thing this
+    /// saves is not what the card drags, and offering it there is a trap: it sits
+    /// directly beside a caption describing a different payload, hands over
+    /// something else, and gives no indication which. That is not a subtle
+    /// mistake to make — it is the reason a working `.pro` was believed not to
+    /// exist for several rounds.
     public func save(group: ConversionGroup, to destination: URL) throws {
         let scoped = destination.startAccessingSecurityScopedResource()
         defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
@@ -386,6 +394,23 @@ public final class ConversionQueue: ObservableObject {
             try? FileManager.default.removeItem(at: target)
             try FileManager.default.copyItem(at: image, to: target)
         }
+    }
+
+    /// Copies a deck's `.pro` into a folder the operator chose.
+    ///
+    /// The presentation mode counterpart to `save(group:to:)`: what it writes is
+    /// the payload the card drags, not the deck's loose images.
+    public func savePresentation(for group: ConversionGroup, to destination: URL) throws {
+        guard let source = presentation(for: group) else {
+            // Deliberately not falling back to the JPEG folder: see `dragPayload`.
+            throw ProPackageError.noPresentation(group.sourceName)
+        }
+        let scoped = destination.startAccessingSecurityScopedResource()
+        defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let target = destination.appendingPathComponent(source.lastPathComponent)
+        try? FileManager.default.removeItem(at: target)
+        try FileManager.default.copyItem(at: source, to: target)
     }
 
     /// Empties the bin: every converted document, plus the `.pro` written for each
