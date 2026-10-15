@@ -182,14 +182,7 @@ final class ProPresenterPackageTests: XCTestCase {
         // Both reach the media at the same nesting depth. Nothing here is a
         // coincidence of the fixture: it is the only path a real file uses.
         func urlIn(_ action: [ProtoReader.Field]) throws -> [ProtoReader.Field] {
-            let slideType = try XCTUnwrap(action.message(23))
-            let presentationSlide = try XCTUnwrap(slideType.message(2))
-            let baseSlide = try XCTUnwrap(presentationSlide.message(1))
-            let element = try XCTUnwrap(baseSlide.message(1))
-            let graphics = try XCTUnwrap(element.message(1))
-            let mediaHolder = try XCTUnwrap(graphics.message(9))
-            let mediaElement = try XCTUnwrap(mediaHolder.message(3))
-            return try XCTUnwrap(mediaElement.message(2))
+            try XCTUnwrap(mediaElement(of: action)?.message(2))
         }
 
         let ourURL = try urlIn(ourActions[0])
@@ -239,15 +232,22 @@ final class ProPresenterPackageTests: XCTestCase {
         try cue.messages(10)
     }
 
-    /// Walks `10.23.2.1.1.1.9.3` to the media element inside a slide action.
-    private func mediaElement(of action: [ProtoReader.Field]) throws -> [ProtoReader.Field]? {
+    /// Walks `10.23.2.1.1.1` to the `Graphics.Element` inside a slide action.
+    private func graphicsElement(of action: [ProtoReader.Field]) throws -> [ProtoReader.Field] {
         let slideType = try XCTUnwrap(action.message(23))
         let presentationSlide = try XCTUnwrap(slideType.message(2))
         let baseSlide = try XCTUnwrap(presentationSlide.message(1))
-        let element = try XCTUnwrap(baseSlide.message(1))
-        let graphics = try XCTUnwrap(element.message(1))
-        let mediaHolder = try XCTUnwrap(graphics.message(9))
-        return try XCTUnwrap(mediaHolder.message(3))
+        let slideElement = try XCTUnwrap(baseSlide.message(1))
+        return try XCTUnwrap(slideElement.message(1))
+    }
+
+    /// Walks `10.23.2.1.1.1.9.3` to the media element inside a slide action.
+    ///
+    /// `graphics.9` is a `Graphics.Fill`, and `Fill.media` is field 3 — the image
+    /// is the element's *fill*, not a separate child of the slide.
+    private func mediaElement(of action: [ProtoReader.Field]) throws -> [ProtoReader.Field]? {
+        let fill = try XCTUnwrap(graphicsElement(of: action).message(9))
+        return try XCTUnwrap(fill.message(3))
     }
 
     /// Every cue group's identifiers must be the cues' own, in order. A group
@@ -419,6 +419,63 @@ final class ProPresenterPackageTests: XCTestCase {
         // set, and the identical absolute string.
         XCTAssertEqual(mediaURL.map(\.number).sorted(), fileURL.map(\.number).sorted())
         XCTAssertEqual(mediaURL.map(\.number).sorted(), [1, 3, 4])
+    }
+
+    /// `Graphics.Element.bounds` is the rectangle the image is drawn into, and it
+    /// is the only field that says *where* the image goes.
+    ///
+    /// Without it an element has no extent. The media still resolves, so
+    /// ProPresenter reports nothing wrong and raises no warning — it renders an
+    /// empty slide showing only its own background. That is what produced a deck
+    /// of black slides that imported without complaint, and the shape test above
+    /// missed it because it walked straight past `graphics` to the media below.
+    func testEveryElementIsGivenTheCanvasToDrawInto() throws {
+        let show = URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter")
+        let manifest = try ProtoReader.fields(
+            of: ProPresenterDocument.encode(
+                name: "Deck",
+                slides: [
+                    ProSlide(
+                        imageURL: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/a.jpg"),
+                        pixelSize: PixelSize(width: 1920, height: 1080)
+                    )
+                ],
+                showRoot: show
+            )
+        )
+        let action = try XCTUnwrap(try XCTUnwrap(manifest.messages(13).first).messages(10).first)
+        let graphics = try graphicsElement(of: action)
+
+        XCTAssertEqual(
+            graphics.map(\.number).sorted(), [1, 3, 5, 9],
+            "uuid, bounds, opacity and fill — the four a generated element needs"
+        )
+        let bounds = try XCTUnwrap(graphics.message(3))
+        XCTAssertEqual(bounds.all(1).count, 1, "an origin, empty because it is (0, 0)")
+        let extent = try XCTUnwrap(bounds.message(2))
+        XCTAssertEqual(try XCTUnwrap(extent.double(1)), 1920, "as wide as the slide")
+        XCTAssertEqual(try XCTUnwrap(extent.double(2)), 1080, "as tall as the slide")
+
+        // And `real.pro` puts its element's bounds at the same field, sized to
+        // the slide's own canvas. Read off a real file rather than invented: the
+        // shape test asserted the media's shape but never this one.
+        let real = try ProtoReader.fields(of: realFixture())
+        let realAction = try XCTUnwrap(try XCTUnwrap(real.messages(13).first).messages(10).first)
+        let realBounds = try XCTUnwrap(graphicsElement(of: realAction).message(3))
+        let realExtent = try XCTUnwrap(realBounds.message(2))
+        let realCanvas = try XCTUnwrap(
+            try XCTUnwrap(
+                try XCTUnwrap(try XCTUnwrap(realAction.message(23)).message(2)).message(1)
+            ).message(6)
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(realExtent.double(1)), try XCTUnwrap(realCanvas.double(1)),
+            "real.pro sizes the element to the canvas width"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(realExtent.double(2)), try XCTUnwrap(realCanvas.double(2)),
+            "and to its height"
+        )
     }
 
     func testEmptyDeckStillDescribesAReadableDocument() throws {

@@ -161,13 +161,22 @@ enum ProPresenterDocument {
         action.message(23) { slideType in
             slideType.message(2) { presentationSlide in
                 presentationSlide.message(1) { baseSlide in
-                    // base_slide.elements -> element -> graphics -> media -> the URL
+                    // base_slide.elements -> element -> graphics -> fill -> media -> the URL
                     baseSlide.message(1) { element in
                         element.message(1) { graphics in
                             graphics.message(1) { uuid in uuid.string(1, newUUID()) }
+                            // `Graphics.Element.bounds` — the rectangle on the
+                            // canvas this element is drawn into. It is the only
+                            // thing that says *where* the image goes. Omit it and
+                            // the element has no extent: the media still resolves,
+                            // so ProPresenter reports nothing wrong, and it
+                            // renders an empty slide showing only the background.
+                            // `real.pro` records the slide's own dimensions here.
+                            graphics.message(3) { bounds in rect(&bounds, slide.pixelSize) }
                             graphics.double(5, 1.0)  // opacity
-                            graphics.message(9) { mediaHolder in
-                                mediaHolder.message(3) { mediaElement in
+                            // `Graphics.Fill`, whose `media` field is the image.
+                            graphics.message(9) { fill in
+                                fill.message(3) { mediaElement in
                                     mediaElement.message(1) { uuid in uuid.string(1, newUUID()) }
                                     mediaElement.message(2) { url in location.write(to: &url) }
                                     mediaElement.message(3) { metadata in
@@ -177,13 +186,14 @@ enum ProPresenterDocument {
                                     mediaElement.message(5) { elementType in
                                         elementType.message(1) { drawing in
                                             drawing.message(5) { natural in size(&natural, slide.pixelSize) }
-                                            // An all-zero origin and size tells
-                                            // ProPresenter to fit the image to the
-                                            // canvas, which is what `real.pro`
-                                            // records: both submessages are empty.
-                                            drawing.message(7) { bounds in
-                                                bounds.message(1) { origin in _ = origin }
-                                                bounds.message(2) { boundsSize in _ = boundsSize }
+                                            // `custom_image_bounds`: an override for when the image
+                                            // has deliberately been placed and cropped by hand.
+                                            // Left empty — as `real.pro` leaves it — the
+                                            // element's own bounds govern where the image
+                                            // is drawn, which is the field above.
+                                            drawing.message(7) { custom in
+                                                custom.message(1) { origin in _ = origin }
+                                                custom.message(2) { extent in _ = extent }
                                             }
                                             drawing.message(14) { crop in _ = crop }
                                             drawing.uint(15, AlphaType.straight.rawValue)
@@ -196,7 +206,7 @@ enum ProPresenterDocument {
                                         }
                                     }
                                 }
-                                mediaHolder.uint(4, 1)
+                                fill.uint(4, 1)  // Fill.enable
                             }
                         }
                     }
@@ -296,6 +306,16 @@ enum ProPresenterDocument {
     private static func size(_ writer: inout ProtoWriter, _ pixels: PixelSize) {
         writer.double(1, Double(pixels.width))
         writer.double(2, Double(pixels.height))
+    }
+
+    /// `Graphics.Rect`: the rectangle on the canvas an element is drawn into.
+    ///
+    /// The origin is left empty because proto3 keeps an all-zero point off the
+    /// wire, which is exactly what `real.pro` records — origin absent, size the
+    /// slide's own dimensions.
+    private static func rect(_ writer: inout ProtoWriter, _ pixels: PixelSize) {
+        writer.message(1) { origin in _ = origin }
+        writer.message(2) { extent in size(&extent, pixels) }
     }
 
     private static func newUUID() -> String {
