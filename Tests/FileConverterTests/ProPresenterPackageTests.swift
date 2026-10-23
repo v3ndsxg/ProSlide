@@ -241,6 +241,36 @@ final class ProPresenterPackageTests: XCTestCase {
         return try XCTUnwrap(slideElement.message(1))
     }
 
+    /// An element needs a path as well as bounds: the path is the outline the
+    /// image fill is painted into, and without one ProPresenter resolves the media,
+    /// raises no warning and draws nothing. The generated element must carry the
+    /// same path, stroke, shadow and feather bytes `real.pro` records for its own.
+    func testGeneratedGraphicsElementCarriesThePathRealProRecords() throws {
+        let realElement = try graphicsElement(
+            of: actions(of: ProtoReader.fields(of: realFixture()).messages(13)[0])[0]
+        )
+        let slide = ProSlide(
+            imageURL: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter/Media/deck-001.jpg"),
+            pixelSize: PixelSize(width: 1920, height: 1080)
+        )
+        let manifest = ProPresenterDocument.encode(
+            name: "Deck",
+            slides: [slide],
+            showRoot: URL(fileURLWithPath: "/Users/someone/Documents/ProPresenter")
+        )
+        let generated = try graphicsElement(
+            of: actions(of: ProtoReader.fields(of: manifest).messages(13)[0])[0]
+        )
+
+        for field in [8, 10, 11, 12] {
+            XCTAssertEqual(
+                generated.first(field)?.bytes, realElement.first(field)?.bytes,
+                "graphics field \(field) must match what ProPresenter wrote"
+            )
+            XCTAssertNotNil(generated.first(field)?.bytes, "graphics field \(field) is present")
+        }
+    }
+
     /// Walks `10.23.2.1.1.1.9.3` to the media element inside a slide action.
     ///
     /// `graphics.9` is a `Graphics.Fill`, and `Fill.media` is field 3 — the image
@@ -447,8 +477,9 @@ final class ProPresenterPackageTests: XCTestCase {
         let graphics = try graphicsElement(of: action)
 
         XCTAssertEqual(
-            graphics.map(\.number).sorted(), [1, 3, 5, 9],
-            "uuid, bounds, opacity and fill — the four a generated element needs"
+            graphics.map(\.number).sorted(), [1, 3, 5, 8, 9, 10, 11, 12],
+            "uuid, bounds, opacity, path, fill, stroke, shadow and feather — "
+                + "a path in particular: without one the fill has no outline and nothing is drawn"
         )
         let bounds = try XCTUnwrap(graphics.message(3))
         XCTAssertEqual(bounds.all(1).count, 1, "an origin, empty because it is (0, 0)")
@@ -526,7 +557,7 @@ final class ProPresenterPackageTests: XCTestCase {
             "a .pro must not be an archive; ProPresenter reads it as a bare message"
         )
         XCTAssertNoThrow(try ProtoReader.fields(of: bytes))
-        XCTAssertLessThan(bytes.count, 4_000, "a manifest names its media; it does not carry it")
+        XCTAssertLessThan(bytes.count, 8_000, "a manifest names its media; it does not carry it")
     }
 
     /// The regression guard for the behaviour above: a deck folder holds JPEGs

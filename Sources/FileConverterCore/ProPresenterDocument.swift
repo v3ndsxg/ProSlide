@@ -174,6 +174,14 @@ enum ProPresenterDocument {
                             // `real.pro` records the slide's own dimensions here.
                             graphics.message(3) { bounds in rect(&bounds, slide.pixelSize) }
                             graphics.double(5, 1.0)  // opacity
+                            // `Graphics.Path`: the outline the fill is painted
+                            // inside. Bounds say how big the element is; the path
+                            // says what shape it is. An element with no path has
+                            // nothing to fill, so the image resolves, nothing warns,
+                            // and the slide is blank. Every element in `real.pro`
+                            // has one, and for a full-slide image it is the unit
+                            // rectangle.
+                            graphics.message(8) { path in unitRectanglePath(&path) }
                             // `Graphics.Fill`, whose `media` field is the image.
                             graphics.message(9) { fill in
                                 fill.message(3) { mediaElement in
@@ -208,6 +216,24 @@ enum ProPresenterDocument {
                                 }
                                 fill.uint(4, 1)  // Fill.enable
                             }
+                            // Stroke, shadow and feather, as `real.pro` records them
+                            // on every element. All three are disabled (their enable
+                            // flags are unset), so they draw nothing; they are
+                            // written so the element looks like ProPresenter's own.
+                            graphics.message(10) { stroke in
+                                stroke.double(2, 3.0)
+                                stroke.message(3) { color in
+                                    color.float(1, 1); color.float(2, 1); color.float(3, 1); color.float(4, 1)
+                                }
+                            }
+                            graphics.message(11) { shadow in
+                                shadow.double(2, 315.0)
+                                shadow.double(3, 5.0)
+                                shadow.double(4, 5.0)
+                                shadow.message(5) { color in color.float(4, 1) }
+                                shadow.double(6, 0.75)
+                            }
+                            graphics.message(12) { feather in feather.double(2, 0.05) }
                         }
                     }
                     baseSlide.uint(4, 1)  // draws_background
@@ -316,6 +342,27 @@ enum ProPresenterDocument {
     private static func rect(_ writer: inout ProtoWriter, _ pixels: PixelSize) {
         writer.message(1) { origin in _ = origin }
         writer.message(2) { extent in size(&extent, pixels) }
+    }
+
+    /// `Graphics.Path`: a closed rectangle over the unit square, with the shape
+    /// marked as a rectangle — the same four points `real.pro` records. Points
+    /// are normalised to the element's bounds. Zero coordinates stay off the wire
+    /// (proto3), so (0,0) is an empty point and the others carry only their
+    /// non-zero axis.
+    private static func unitRectanglePath(_ path: inout ProtoWriter) {
+        path.bool(1, true)  // closed
+        for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+            path.message(2) { point in
+                // BezierPoint: the point and its two control handles, all equal.
+                for field in 1...3 {
+                    point.message(field) { coordinate in
+                        if x != 0 { coordinate.double(1, x) }
+                        if y != 0 { coordinate.double(2, y) }
+                    }
+                }
+            }
+        }
+        path.message(3) { shape in shape.uint(1, 1) }  // TYPE_RECTANGLE
     }
 
     private static func newUUID() -> String {
