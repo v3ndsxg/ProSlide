@@ -428,21 +428,32 @@ public final class ConversionQueue: ObservableObject {
         try FileManager.default.copyItem(at: source, to: target)
     }
 
-    /// Empties the bin: every converted document, plus the `.pro` written for each
-    /// one, plus the media staged into ProPresenter's tree for it.
+    /// Resets the app to a clean slate: empties the bin (every converted document,
+    /// the `.pro` written for each, and the media staged into ProPresenter's tree
+    /// for it) and clears the file list on the main page.
     ///
     /// Presentations live in their own folder rather than inside each document's,
     /// so that folder has to go too or Clear would leave them behind — and the
     /// staged links have to go with it, or ProPresenter's media folder keeps a
     /// name for every slide after the deck that produced them is gone.
-    public func clearBin() throws {
+    ///
+    /// The file list is left alone while a batch is running, since those files are
+    /// in use; the UI does not offer Clear then.
+    ///
+    /// The two locations are parameters so a test can point them at temporary
+    /// folders instead of the operator's real ones.
+    public func clearBin(
+        presentationsDirectory: URL = BinStorage.presentationsDirectory,
+        showRoot: URL = ProPresenterInstallation.defaultDocumentRoot
+    ) throws {
+        removeAll()
+        message = nil
         presentationTask?.cancel()
         presentations = [:]
         presentationFailures = [:]
         for folder in groups.map(\.folderURL) {
             try FileManager.default.removeItem(at: folder)
         }
-        let showRoot = ProPresenterInstallation.defaultDocumentRoot
         for group in groups {
             try? FileManager.default.removeItem(
                 at: ProPresenterPackage.stagedMediaDirectory(for: group, in: showRoot)
@@ -450,7 +461,7 @@ public final class ConversionQueue: ObservableObject {
         }
         // `try?`: the folder may never have been created, and failing to clear a
         // bin because of that would be worse than leaving it.
-        try? FileManager.default.removeItem(at: BinStorage.presentationsDirectory)
+        try? FileManager.default.removeItem(at: presentationsDirectory)
         reloadBin()
     }
 }

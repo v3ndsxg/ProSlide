@@ -122,6 +122,34 @@ final class ConversionQueueTests: XCTestCase {
         XCTAssertEqual(recorder.inputs, ["a.pdf"])
     }
 
+    /// Clear resets the app, not only the bin: the files queued on the main page
+    /// go too, so new content can be brought in from scratch.
+    func testClearBinAlsoEmptiesTheFileListOnTheMainPage() async throws {
+        let queue = makeQueue(Recorder())
+        queue.accept(["a.pdf", "b.pdf"].map(fileURL))
+        queue.convert()
+        await waitUntilIdle(queue)
+        queue.message = "a leftover notice"
+        XCTAssertEqual(queue.items.count, 2)
+
+        let presentations = try makeTemporaryDirectory()
+        let showRoot = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: presentations)
+            try? FileManager.default.removeItem(at: showRoot)
+        }
+        try queue.clearBin(presentationsDirectory: presentations, showRoot: showRoot)
+
+        XCTAssertTrue(queue.items.isEmpty, "the queued files are cleared along with the bin")
+        XCTAssertNil(queue.message)
+        XCTAssertEqual(queue.progress, 0)
+        XCTAssertEqual(queue.scopesStarted, queue.scopesStopped)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: presentations.path),
+            "and the presentations folder it was told to empty"
+        )
+    }
+
     // MARK: - Progress
     func testAggregateProgressMath() {
         // Each call names the method outright rather than binding it to a local

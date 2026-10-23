@@ -13,39 +13,42 @@ struct ContentView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Each importer sits on its own view. SwiftUI keeps only the last
+            // `fileImporter` attached to a given view, so two on one view left the
+            // first one -- "click to choose files" -- unable to open at all.
             mainPane
+                .fileImporter(
+                    isPresented: $showingImporter,
+                    allowedContentTypes: [.pdf, UTType(filenameExtension: "pptx")!],
+                    allowsMultipleSelection: true
+                ) { result in
+                    if case .success(let urls) = result { queue.accept(urls) }
+                }
             if !queue.groups.isEmpty {
                 Divider()
                 binPanel
+                    .fileImporter(isPresented: $showingSaveImporter, allowedContentTypes: [.folder]) { result in
+                        guard case .success(let url) = result, let group = saveTarget else { return }
+                        saveTarget = nil
+                        do {
+                            // What is saved is what the card drags. It used to always
+                            // be the JPEG folder, in presentation mode too -- beside a
+                            // caption describing a different payload, which is how a
+                            // working `.pro` came to be believed missing.
+                            if queue.dragMode == .presentation {
+                                try queue.savePresentation(for: group, to: url)
+                            } else {
+                                try queue.save(group: group, to: url)
+                            }
+                        } catch {
+                            queue.message = error.localizedDescription
+                        }
+                    }
             }
         }
         .task { queue.reloadBin() }
-        .fileImporter(
-            isPresented: $showingImporter,
-            allowedContentTypes: [.pdf, UTType(filenameExtension: "pptx")!],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result { queue.accept(urls) }
-        }
-        .fileImporter(isPresented: $showingSaveImporter, allowedContentTypes: [.folder]) { result in
-            guard case .success(let url) = result, let group = saveTarget else { return }
-            saveTarget = nil
-            do {
-                // What is saved is what the card drags. It used to always be the
-                // JPEG folder, in presentation mode too -- beside a caption
-                // describing a different payload, which is how a working `.pro`
-                // came to be believed missing.
-                if queue.dragMode == .presentation {
-                    try queue.savePresentation(for: group, to: url)
-                } else {
-                    try queue.save(group: group, to: url)
-                }
-            } catch {
-                queue.message = error.localizedDescription
-            }
-        }
-        .confirmationDialog("Clear all converted images from the bin?", isPresented: $confirmingClear, titleVisibility: .visible) {
-            Button("Clear Bin", role: .destructive) {
+        .confirmationDialog("Clear the bin and the file list?", isPresented: $confirmingClear, titleVisibility: .visible) {
+            Button("Clear Everything", role: .destructive) {
                 do {
                     try queue.clearBin()
                 } catch {
@@ -53,6 +56,8 @@ struct ContentView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes every converted deck, its presentation, and the files queued on the main page, so you can start fresh.")
         }
     }
 
@@ -207,6 +212,7 @@ struct ContentView: View {
                 Button("Open Folder") { BinOpener.open(queue.binRootURL) }
                 Button("Presentations") { BinOpener.open(queue.binPresentationsURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
+                    .disabled(queue.isConverting)
             }
             Picker("Card drag", selection: $queue.dragMode) {
                 ForEach(DragMode.allCases) { mode in
