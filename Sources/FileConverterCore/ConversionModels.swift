@@ -154,6 +154,11 @@ public struct ConversionQueueItem: Identifiable, Equatable, Sendable {
         case converting
         case succeeded(folder: URL)
         case failed(String)
+
+        public var isSucceeded: Bool {
+            if case .succeeded = self { return true }
+            return false
+        }
     }
 
     public let id: UUID
@@ -238,7 +243,8 @@ public enum ProPackageError: LocalizedError, Equatable {
         case .unreadableImage(let name): "The size of \(name) could not be read."
         case .showRootUnavailable(let path):
             "ProPresenter's folder was not found at \(path). Open ProPresenter once, "
-                + "or move your library back, then Rebuild — the card drags its JPEG folder for now."
+                + "or move your library back, then Rebuild. Until then this card cannot drag a "
+                + "presentation; switch to JPEG Folder to use its images."
         case .stageFailed(let name):
             "\(name) could not be linked or copied into ProPresenter's media folder."
         case .writeFailed(let detail): "The presentation could not be written. \(detail)"
@@ -250,6 +256,7 @@ public enum ConversionError: LocalizedError, Equatable {
     case unsupportedFile
     case libreOfficeUnavailable
     case libreOfficeFailed(String)
+    case libreOfficeTimedOut(Int)
     case noPDFProduced
     case unreadablePDF
     case tooManyPages(Int)
@@ -260,6 +267,8 @@ public enum ConversionError: LocalizedError, Equatable {
         case .unsupportedFile: "Choose a PDF or PowerPoint (.pptx) file."
         case .libreOfficeUnavailable: "LibreOffice was not found. Install LibreOffice or choose a PDF."
         case .libreOfficeFailed(let detail): "LibreOffice could not convert this PowerPoint file. \(detail)"
+        case .libreOfficeTimedOut(let seconds):
+            "LibreOffice did not finish converting this PowerPoint file within \(seconds) seconds and was stopped."
         case .noPDFProduced: "LibreOffice finished without producing a PDF."
         case .unreadablePDF: "The PDF could not be opened."
         case .tooManyPages(let count): "This PDF has \(count) pages, which exceeds the 300-page limit."

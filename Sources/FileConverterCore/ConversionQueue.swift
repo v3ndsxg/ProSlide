@@ -146,18 +146,29 @@ public final class ConversionQueue: ObservableObject {
 
     // MARK: - Conversion
 
-    /// Re-queues every document and runs the batch. One document failing never
-    /// stops the rest.
+    /// Documents that still need converting: anything not already done.
+    ///
+    /// A finished document stays in the list for reference but is not converted
+    /// again, or adding one file to a completed batch would re-convert all the
+    /// others into `… JPEGs 2` duplicates. To convert a finished file again, drop
+    /// it again.
+    public var pendingCount: Int {
+        items.filter { !$0.status.isSucceeded }.count
+    }
+
+    /// Runs every document that has not yet succeeded, including earlier failures
+    /// and anything a previous run was stopped before reaching. One document
+    /// failing never stops the rest.
     public func convert() {
-        guard !isConverting, !items.isEmpty else { return }
+        guard !isConverting, pendingCount > 0 else { return }
         isConverting = true
         progress = 0
         message = nil
-        for index in items.indices {
+        for index in items.indices where !items[index].status.isSucceeded {
             items[index].status = .pending
         }
 
-        let batch = items.map(\.id)
+        let batch = items.filter { !$0.status.isSucceeded }.map(\.id)
         let profile = makeTemporaryProfile()
         temporaryProfile = profile
         let convertOne = self.convertOne

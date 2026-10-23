@@ -187,13 +187,13 @@ struct ContentView: View {
             Button(convertTitle) { queue.convert() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(queue.items.isEmpty || queue.isConverting)
+                .disabled(queue.pendingCount == 0 || queue.isConverting)
         }
     }
 
     private var convertTitle: String {
         if queue.isConverting { return "Converting…" }
-        let count = queue.items.count
+        let count = queue.pendingCount
         return count == 0 ? "Convert" : "Convert \(count) file\(count == 1 ? "" : "s")"
     }
 

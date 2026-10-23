@@ -113,11 +113,11 @@ public enum ProPresenterPackage {
     /// Links every slide into `showRoot`'s media tree and returns the slides
     /// renamed to their staged locations, in the same order.
     ///
-    /// The deck's folder is replaced rather than reused. A deck whose JPEGs
-    /// changed since the last build must not leave earlier links behind, and
-    /// ProPresenter would otherwise be offered media the presentation no longer
-    /// names. Replacing it also keeps the number of names ProPresenter sees
-    /// equal to the number of slides, whatever has been rebuilt.
+    /// A deck that is already staged and still matches its JPEGs is reused as it
+    /// is. Otherwise the folder is replaced rather than added to: a deck whose
+    /// JPEGs changed since the last build must not leave earlier links behind,
+    /// and ProPresenter would otherwise be offered media the presentation no
+    /// longer names.
     private static func stage(
         slides: [ProSlide],
         group: ConversionGroup,
@@ -125,6 +125,13 @@ public enum ProPresenterPackage {
         linkMedia: MediaLinker
     ) throws -> [ProSlide] {
         let deck = stagedMediaDirectory(for: group, in: showRoot)
+        // Already staged and still current: keep it. Every launch rebuilds every
+        // deck's presentation, and replacing the media each time would move it
+        // to a new folder under presentations ProPresenter may already hold
+        // paths into. Only media that no longer matches the deck is replaced.
+        if let current = currentStaging(of: slides, in: deck) {
+            return current
+        }
         do {
             // Only exists on a rebuild, so its absence is not a failure.
             if FileManager.default.fileExists(atPath: deck.path) {
@@ -143,6 +150,46 @@ public enum ProPresenterPackage {
             try? FileManager.default.removeItem(at: deck)
             throw (error as? ProPackageError) ?? ProPackageError.stageFailed(error.localizedDescription)
         }
+    }
+
+    /// The slides renamed to their staged locations, if `deck` already holds
+    /// exactly those images and nothing else; nil if anything is missing, extra,
+    /// or no longer the deck's own bytes.
+    private static func currentStaging(of slides: [ProSlide], in deck: URL) -> [ProSlide]? {
+        let manager = FileManager.default
+        guard let items = try? manager.contentsOfDirectory(
+                  at: deck, includingPropertiesForKeys: [.isDirectoryKey]
+              ),
+              items.count == 1,
+              (try? items[0].resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
+              let files = try? manager.contentsOfDirectory(at: items[0], includingPropertiesForKeys: nil),
+              files.count == slides.count
+        else { return nil }
+
+        var staged: [ProSlide] = []
+        for slide in slides {
+            let candidate = items[0].appendingPathComponent(slide.imageURL.lastPathComponent)
+            guard sameContent(slide.imageURL, candidate) else { return nil }
+            staged.append(ProSlide(imageURL: candidate, pixelSize: slide.pixelSize, label: slide.label))
+        }
+        return staged
+    }
+
+    /// Whether `staged` is still the deck's own image: the same inode where it
+    /// was linked, or the same size and modification time where it was copied.
+    /// A JPEG that was re-rendered is a new file, so it fails both.
+    private static func sameContent(_ image: URL, _ staged: URL) -> Bool {
+        let manager = FileManager.default
+        guard let a = try? manager.attributesOfItem(atPath: image.path),
+              let b = try? manager.attributesOfItem(atPath: staged.path)
+        else { return false }
+        if let deviceA = a[.systemNumber] as? NSNumber, let deviceB = b[.systemNumber] as? NSNumber,
+           let inodeA = a[.systemFileNumber] as? NSNumber, let inodeB = b[.systemFileNumber] as? NSNumber,
+           deviceA == deviceB, inodeA == inodeB {
+            return true
+        }
+        return (a[.size] as? NSNumber) == (b[.size] as? NSNumber)
+            && (a[.modificationDate] as? Date) == (b[.modificationDate] as? Date)
     }
 
     /// Links `image` to `staged`, falling back to a copy where the two cannot

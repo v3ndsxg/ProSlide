@@ -792,6 +792,64 @@ final class ProPresenterPackageTests: XCTestCase {
         }
     }
 
+    /// Every launch rebuilds every deck's presentation. Staging that still
+    /// matches the deck is kept as it is, so a presentation ProPresenter already
+    /// holds keeps pointing at media that exists, rather than at a folder the next
+    /// launch replaced.
+    func testRebuildingAnUnchangedDeckKeepsItsStagedMediaWhereItIs() throws {
+        let deck = try makeDeck(imageCount: 3)
+        defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
+        let pixelSize: (URL) -> PixelSize? = { _ in PixelSize(width: 1920, height: 1080) }
+
+        _ = try ProPresenterPackage.package(
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
+        )
+        let before = try stagedFiles(of: deck.group, in: showRoot)
+        _ = try ProPresenterPackage.package(
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
+        )
+        let after = try stagedFiles(of: deck.group, in: showRoot)
+
+        XCTAssertEqual(after, before, "the same files at the same paths, not a fresh folder")
+    }
+
+    /// The other half: media that no longer matches the deck is replaced, not kept.
+    func testStagedMediaIsReplacedWhenTheDecksImagesChange() throws {
+        let deck = try makeDeck(imageCount: 2)
+        defer { try? FileManager.default.removeItem(at: deck.folder) }
+        let showRoot = try makeShowRoot()
+        defer { try? FileManager.default.removeItem(at: showRoot) }
+        let out = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: out) }
+        let pixelSize: (URL) -> PixelSize? = { _ in PixelSize(width: 1920, height: 1080) }
+
+        _ = try ProPresenterPackage.package(
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
+        )
+        let before = try stagedFiles(of: deck.group, in: showRoot)
+
+        // Re-render the first page: a new file, so a new inode.
+        let first = deck.group.imageURLs[0]
+        try FileManager.default.removeItem(at: first)
+        try Data("re-rendered".utf8).write(to: first)
+
+        _ = try ProPresenterPackage.package(
+            group: deck.group, destinationDirectory: out, showRoot: showRoot, pixelSize: pixelSize
+        )
+        let after = try stagedFiles(of: deck.group, in: showRoot)
+
+        XCTAssertNotEqual(after, before, "the stale links were replaced")
+        XCTAssertEqual(
+            try inode(of: try XCTUnwrap(after[first.lastPathComponent])), try inode(of: first),
+            "and the new one is linked to the new image"
+        )
+        XCTAssertEqual(after.count, 2)
+    }
+
     /// The hard link is not decoration: it is the difference between naming the
     /// deck's bytes and holding a second copy of them.
     func testStagedMediaNamesTheDecksBytesRatherThanCopyingThem() throws {

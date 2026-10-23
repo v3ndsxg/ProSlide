@@ -5,7 +5,18 @@ import PDFKit
 import UniformTypeIdentifiers
 
 public struct ConversionEngine {
-    public init() {}
+    /// How long LibreOffice gets to turn one PowerPoint file into a PDF before it
+    /// is stopped. A hung `soffice` would otherwise hold the whole batch forever.
+    public var libreOfficeTimeout: TimeInterval
+
+    /// A specific `soffice` to run, instead of searching the usual places.
+    /// Exists so tests can stand in a fake one.
+    private let libreOfficeOverride: URL?
+
+    public init(libreOfficeTimeout: TimeInterval = 300, libreOffice: URL? = nil) {
+        self.libreOfficeTimeout = libreOfficeTimeout
+        self.libreOfficeOverride = libreOffice
+    }
 
     /// - Parameter progress: called as rendering proceeds, 0 to 1. It is only
     ///   ever called from this function and never stored, so it is deliberately
@@ -50,13 +61,24 @@ public struct ConversionEngine {
         }
 
         let outputDirectory = try makeOutputDirectory(for: input, in: options.destination)
-        for index in 0..<document.pageCount {
-            guard let page = document.page(at: index) else { continue }
-            let destination = outputDirectory.appendingPathComponent(
-                String(format: "%@-%03d.jpg", safeFilenameStem(input.deletingPathExtension().lastPathComponent), index + 1)
-            )
-            try render(page: page, to: destination, options: options)
-            await progress(0.15 + (0.85 * Double(index + 1) / Double(document.pageCount)))
+        do {
+            for index in 0..<document.pageCount {
+                // Stop between pages, not only between files, so a long PDF does
+                // not have to finish before Stop takes effect.
+                try Task.checkCancellation()
+                guard let page = document.page(at: index) else { continue }
+                let destination = outputDirectory.appendingPathComponent(
+                    String(format: "%@-%03d.jpg", safeFilenameStem(input.deletingPathExtension().lastPathComponent), index + 1)
+                )
+                try render(page: page, to: destination, options: options)
+                await progress(0.15 + (0.85 * Double(index + 1) / Double(document.pageCount)))
+            }
+        } catch {
+            // Half a deck must not stay behind. The bin lists any folder holding
+            // JPEGs, so a failure on page 17 of 40 would otherwise show up as a
+            // finished 16-slide deck and get a presentation built for it.
+            try? FileManager.default.removeItem(at: outputDirectory)
+            throw error
         }
         return outputDirectory
     }
@@ -72,7 +94,7 @@ public struct ConversionEngine {
         temporaryDirectory: URL,
         profileDirectory: URL?
     ) async throws -> URL {
-        let executable = try libreOfficeExecutable()
+        let executable = try libreOfficeOverride ?? libreOfficeExecutable()
         let process = Process()
         let errorPipe = Pipe()
         process.executableURL = executable
@@ -106,22 +128,47 @@ public struct ConversionEngine {
             return String(decoding: bytes, as: UTF8.self)
         }
 
-        var startError: Error?
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            process.terminationHandler = { _ in continuation.resume() }
-            do {
-                try process.run()
-            } catch {
-                startError = error
-                continuation.resume()
-            }
+        // Stop and the timeout both end the child rather than waiting it out.
+        let guardian = ProcessGuardian(process)
+        let timeout = libreOfficeTimeout
+        let watchdog = Task {
+            try await Task.sleep(nanoseconds: UInt64(max(timeout, 0) * 1_000_000_000))
+            guardian.stop(reason: .timedOut)
         }
+
+        var startError: Error?
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                process.terminationHandler = { _ in continuation.resume() }
+                do {
+                    try process.run()
+                    guardian.didStart()
+                } catch {
+                    startError = error
+                    continuation.resume()
+                }
+            }
+        } onCancel: {
+            guardian.stop(reason: .cancelled)
+        }
+        watchdog.cancel()
         // The child has inherited its own copy of the write end; closing ours
         // guarantees the reader sees EOF once the process exits (or never spawned).
         try? errorPipe.fileHandleForWriting.close()
 
-        let message = try await messageTask.value
+        let stopped = guardian.reason
+        if stopped != nil {
+            // A killed child can leave a grandchild holding the pipe open, in
+            // which case the reader would never see EOF. Close our end too.
+            try? errorPipe.fileHandleForReading.close()
+        }
+        let message = (try? await messageTask.value) ?? ""
         if let startError { throw startError }
+        switch stopped {
+        case .cancelled: throw CancellationError()
+        case .timedOut: throw ConversionError.libreOfficeTimedOut(Int(libreOfficeTimeout))
+        case nil: break
+        }
         guard process.terminationStatus == 0 else { throw ConversionError.libreOfficeFailed(message) }
 
         let expected = temporaryDirectory.appendingPathComponent(source.deletingPathExtension().lastPathComponent + ".pdf")
@@ -171,9 +218,26 @@ public struct ConversionEngine {
         return trimmed.isEmpty ? "document" : trimmed
     }
 
+    /// The size the page is shown at, in points: its crop box, turned on its side
+    /// when the page is rotated a quarter turn.
+    ///
+    /// Media box is the whole sheet; the crop box is what a viewer displays, and
+    /// is smaller wherever a file carries bleed or printer's marks. Rotation is
+    /// applied by `PDFPage.draw`, but `bounds(for:)` reports the unrotated box, so
+    /// the canvas has to be sized for the rotated page or the render comes out
+    /// the wrong shape and clipped.
+    static func displayedSize(of page: PDFPage) -> CGSize {
+        let bounds = page.bounds(for: .cropBox)
+        let quarterTurn = abs(page.rotation) % 180 == 90
+        return quarterTurn
+            ? CGSize(width: bounds.height, height: bounds.width)
+            : bounds.size
+    }
+
     private func render(page: PDFPage, to destination: URL, options: ConversionOptions) throws {
-        let bounds = page.bounds(for: .mediaBox)
+        let bounds = ConversionEngine.displayedSize(of: page)
         let maxPixelDimension = 8192
+        guard bounds.width > 0, bounds.height > 0 else { throw ConversionError.imageEncodingFailed }
         let scale = min(
             CGFloat(options.resolution.pixelWidth) / bounds.width,
             CGFloat(maxPixelDimension) / max(bounds.width, bounds.height)
@@ -192,7 +256,7 @@ public struct ConversionEngine {
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
 
         context.scaleBy(x: scale, y: scale)
-        page.draw(with: .mediaBox, to: context)
+        page.draw(with: .cropBox, to: context)
 
         guard let cgImage = context.makeImage(),
               let dest = CGImageDestinationCreateWithURL(
@@ -200,5 +264,48 @@ public struct ConversionEngine {
               ) else { throw ConversionError.imageEncodingFailed }
         CGImageDestinationAddImage(dest, cgImage, [kCGImageDestinationLossyCompressionQuality: NSNumber(value: options.quality)] as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { throw ConversionError.imageEncodingFailed }
+    }
+}
+
+/// Ends a child process on request, safely from any thread.
+///
+/// `Process.terminate()` raises an Objective-C exception if the process has not
+/// been launched, and Stop or the watchdog can fire before, during or after the
+/// launch. This remembers a stop that arrives early and applies it as soon as
+/// the process exists, and never touches one that has already finished.
+private final class ProcessGuardian: @unchecked Sendable {
+    enum Reason { case cancelled, timedOut }
+
+    private let process: Process
+    private let lock = NSLock()
+    private var started = false
+    private var requested: Reason?
+
+    init(_ process: Process) { self.process = process }
+
+    /// Why the process was stopped, or nil if it ran to completion.
+    var reason: Reason? {
+        lock.lock(); defer { lock.unlock() }
+        return requested
+    }
+
+    func didStart() {
+        lock.lock()
+        started = true
+        let pending = requested
+        lock.unlock()
+        if pending != nil { terminate() }
+    }
+
+    func stop(reason: Reason) {
+        lock.lock()
+        if requested == nil { requested = reason }
+        let running = started
+        lock.unlock()
+        if running { terminate() }
+    }
+
+    private func terminate() {
+        if process.isRunning { process.terminate() }
     }
 }

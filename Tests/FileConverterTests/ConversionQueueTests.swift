@@ -89,6 +89,39 @@ final class ConversionQueueTests: XCTestCase {
         XCTAssertEqual(queue.scopesStarted, queue.scopesStopped)
     }
 
+    /// Adding a file to a finished batch converts only the new one. Re-running the
+    /// old ones would pile `… JPEGs 2` duplicates into the bin, and rebuild their
+    /// presentations.
+    func testAddingAFileToAFinishedBatchConvertsOnlyTheNewOne() async throws {
+        let recorder = Recorder()
+        let queue = makeQueue(recorder)
+        queue.accept(["a.pdf", "b.pdf"].map(fileURL))
+        queue.convert()
+        await waitUntilIdle(queue)
+        XCTAssertEqual(queue.pendingCount, 0)
+
+        queue.accept(["c.pdf"].map(fileURL))
+        XCTAssertEqual(queue.pendingCount, 1)
+        queue.convert()
+        await waitUntilIdle(queue)
+
+        XCTAssertEqual(recorder.inputs, ["a.pdf", "b.pdf", "c.pdf"],
+                       "a and b were already done and must not run again")
+        XCTAssertEqual(queue.pendingCount, 0)
+    }
+
+    func testConvertWithEverythingAlreadyDoneDoesNothing() async throws {
+        let recorder = Recorder()
+        let queue = makeQueue(recorder)
+        queue.accept(["a.pdf"].map(fileURL))
+        queue.convert()
+        await waitUntilIdle(queue)
+
+        queue.convert()
+        XCTAssertFalse(queue.isConverting, "nothing is pending, so no run starts")
+        XCTAssertEqual(recorder.inputs, ["a.pdf"])
+    }
+
     // MARK: - Progress
     func testAggregateProgressMath() {
         // Each call names the method outright rather than binding it to a local

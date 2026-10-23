@@ -1,148 +1,111 @@
 # ProSlide
-A macOS app that converts PDF and PowerPoint files into dependable JPEG images, ready to import into ProPresenter without destroying slide contents.
+A macOS app that converts PDF and PowerPoint files into JPEG images for ProPresenter, and can package each deck as a ProPresenter `.pro` presentation.
 
-## Installing ProSlide
+## Install
 
-### Should you trust it?
-
-That is your call to make, so here is everything you need to decide rather than a request for faith.
-
-- **It is MIT-licensed**, so you are explicitly permitted to read all of it. See `LICENSE` and the source layout below.
-- **It is small: roughly 1,900 lines of shipped Swift** (405 in the app, 1,467 in the engine), plus 1,337 lines of tests. That is short enough to actually read end to end, not just skim.
-- **It contains no network code at all** — no `URLSession`, no `URLRequest`, no URLs. It cannot phone home, because there is nothing to phone home with.
-- **It stores no credentials**, and never touches the Keychain.
-- **It launches exactly one external program: LibreOffice**, at a path the app checks for first, to turn `.pptx` files into PDFs. Converting a PDF launches nothing. The only other system interactions are revealing a folder in Finder when you click **Open**, and reading image dimensions from the JPEGs it just wrote.
-- The real risk is not the app but the documents: opening a PDF or PowerPoint file means trusting Apple's PDFKit and LibreOffice to parse it, exactly as Preview and Keynote do. See [Security considerations](#security-considerations) for that, and for the 8192 px / 300 page guards against pathological files.
-
-None of that makes it safe by assertion. It makes it auditable in a way that fits on one screen, which is the point.
-
-### Installing
-
-You will need macOS 13 or later, and either Xcode 15+ or the Swift Command Line Tools so `swift` is available. LibreOffice is needed only for `.pptx`; PDF conversion works without it.
+Requires macOS 13+ and Xcode 15+ or the Swift Command Line Tools. LibreOffice is needed only for `.pptx`; PDFs convert without it.
 
 ```
 git clone https://github.com/v3ndsxg/ProSlide.git
 cd ProSlide
 ./Scripts/make-app-bundle.sh --install
-```
-
-That compiles a release build and copies a working `ProSlide.app` into `/Applications`. To open it, either
-
-```
 open /Applications/ProSlide.app
 ```
 
-or just find **ProSlide** in Spotlight or Launchpad — once installed it is an ordinary app like any other.
+The app is ad-hoc signed and not notarized, so Gatekeeper may object on first launch. Right-click the app and choose **Open** once, or run `xattr -dr com.apple.quarantine /Applications/ProSlide.app`.
 
-### If macOS refuses to open it
+### Should you trust it?
+- MIT-licensed and small enough to read end to end.
+- No network code, no credentials, no Keychain.
+- It launches one external program, LibreOffice, and only for `.pptx`.
+- The real risk is the documents: PDFKit and LibreOffice parse files you open, as Preview and Keynote do. See [Security](#security).
 
-The app is **ad-hoc signed** (`codesign -s -`) and is **not notarized**. There is no Apple-issued developer identity behind it, because it is not sold through the App Store, so Gatekeeper may object on first launch. Nothing is wrong with the build.
+## Using it
+1. Drag PDFs and `.pptx` files onto the panel, or click it to pick them.
+2. Leave the resolution at Full HD unless you have a reason.
+3. Press **Convert** (⌘↩). Files run one at a time; a failure doesn't stop the rest.
+4. Each document appears in the **Bin** as a card, remembered across launches.
+5. Drag the card into ProPresenter.
 
-Click through it by right-clicking the app in Finder and choosing **Open** once, or clear the quarantine flag:
+**Convert** runs only files that haven't finished, so adding a file to a completed batch doesn't redo the others. Drop a file again to convert it again; that creates a second folder rather than overwriting the first. **Stop** ends the batch, including a running LibreOffice, and discards the file in progress.
 
-```
-xattr -dr com.apple.quarantine /Applications/ProSlide.app
-```
+## The bin and dragging
+A switch at the top of the bin sets what a card drag hands over:
 
-Contributors should see [Install](#install) for the build flags, and the `Scripts/make-app-bundle.sh` header for the full usage.
+- **.pro Presentation** (default): one `Name.pro`, which ProPresenter opens as a single named presentation with every slide attached.
+- **JPEG Folder**: the `Name JPEGs` folder, which ProPresenter imports as a plain sequence. Use this to add slides to an existing presentation, or when you need something portable.
+
+Other controls:
+- Drag a single thumbnail to move one image.
+- **Save…** copies what the card drags (the `.pro` or the JPEGs) to a folder you choose.
+- **Rebuild** rewrites a deck's `.pro`. **Presentations** reveals the `Pro` folder. **Clear** empties the bin.
+
+A card drag carries one item, never a pile of files: SwiftUI hands over a single `NSItemProvider`, so a list of URLs arrives as one slide. That's why the `.pro`, which references every image, is the way to drag a whole deck.
+
+If a deck's `.pro` can't be written, its card won't drag in presentation mode, and the bin explains why. It does not fall back to the JPEGs.
+
+### Where files live
+- JPEGs: `~/Documents/ProSlide/Bin/<Name> JPEGs/`, holding JPEGs and nothing else.
+- Presentations: `~/Documents/ProSlide/Pro/`, kept outside the deck folders because ProPresenter imports a folder containing a `.pro` as a presentation, which would break the JPEG Folder option.
+- Both are under Documents on purpose. ProPresenter opens these paths itself, and macOS won't let it into another app's `Application Support` container. Decks left in the old location (`~/Library/Application Support/FileConverter/Bin`) are moved across on the first scan.
+
+## How the `.pro` works
+A `.pro` is a protobuf manifest that **names** images; it can't contain them. So for each deck, ProSlide:
+
+1. Hard-links the JPEGs into `<ProPresenter folder>/Media/Imported/<deck>/<item>/`. A link is a second name for the same bytes, so nothing is duplicated. If the link fails (a library on another disk), it copies instead.
+2. Writes a `.pro` whose media paths point at those files.
+
+Consequences:
+- The `.pro` is tied to the machine whose ProPresenter library it was written against. Use JPEG Folder to move slides between machines.
+- ProPresenter's folder is found via `PathSettings.proPaths`, then `~/Documents/ProPresenter`, then `~/Library/Application Support/ProPresenter`. It must already exist, because ProSlide never creates it. A library moved elsewhere in ProPresenter's preferences may not be found.
+- Rebuilding keeps a deck's staged media where it is unless the deck's images changed. **Clear** deletes it, so re-import a deck afterwards if ProPresenter reads its images in place.
+- Slides carry no playback duration, so each holds until you click.
+
+### The format
+ProPresenter 7+ stores presentations as protobuf. The schema is community-reverse-engineered and not supported by Renewed Vision. ProSlide writes it with a small wire-format writer (`ProtobufWriter.swift`) and no `protoc` step.
+
+`Tests/FileConverterTests/Fixtures/real.pro` is a presentation exported by ProPresenter 21.3 and is the ground truth. What an image slide needs, each of which was wrong at least once:
+
+- **One action per cue**, a presentation slide. The image is an element inside it. There are no media actions.
+- **A path as well as bounds** on the image element: a closed rectangle over the unit square. Without it the media resolves, nothing warns, and the slide is blank.
+- **Bounds** equal to the slide's size.
+- **Media URLs** use root `ROOT_SHOW` (10), a path relative to ProPresenter's folder, and a full `file://` absolute string. Paths never climb out with `..`.
+- **`metadata.format`** is uppercase `JPG`.
+- **The cue group** names the cues by their own identifiers.
+- **No arrangements.**
+
+## Conversion
+- **PDF:** PDFKit and Core Graphics render each page to JPEG, using the page's crop box and honouring its rotation.
+- **PPTX:** LibreOffice runs headless to make a temporary PDF, which is rendered the same way. A batch shares one LibreOffice profile, and a conversion that takes over five minutes is stopped.
+- **Quality:** always ImageIO's maximum (1.0). That is the top lossy setting, not lossless.
+- **Embed Fonts:** passed to LibreOffice's PDF export. It's on by default as a safeguard for odd font cases.
+- **Fidelity:** LibreOffice output depends on installed fonts and PowerPoint-specific effects.
 
 ## Layout
-- `App/ProSlide/` — the app: `ProSlideApp.swift`, `ContentView.swift`, `BinOpener.swift` and its asset catalog.
-- `App/ProSlide.xcodeproj` — development only. Not needed to build, run, or install the app.
-- `Package.swift` — builds both the engine library and the app executable.
-- `Sources/FileConverterCore/` — the Swift package library: the conversion engine, the batch queue, and the ProPresenter packaging.
-- `Tests/FileConverterTests/` — engine, batch and packaging tests.
-- `Scripts/make-app-bundle.sh` — assembles `ProSlide.app` from `swift build`.
+- `App/ProSlide/`: the SwiftUI app.
+- `App/ProSlide.xcodeproj`: development only (breakpoints, previews).
+- `Sources/FileConverterCore/`: the conversion engine, batch queue and `.pro` packaging.
+- `Tests/FileConverterTests/`: tests and fixtures.
+- `Scripts/make-app-bundle.sh`: builds `ProSlide.app` from `swift build`.
 
-The app links the engine as a local Swift package, so there is one copy of the rendering code and no duplicate `@main`. The batch queue lives in the library rather than the app specifically so batch behaviour is covered by `swift test` and CI, without needing a window.
+## Development
+Open `App/ProSlide.xcodeproj` in Xcode, or use the package directly. When you add or rename a file under `App/ProSlide/`, also add it to the `ProSlideApp` target in `Package.swift`, or it will be missing from the installed app.
 
-## Develop in Xcode
-Open `App/ProSlide.xcodeproj` for breakpoints and SwiftUI previews. When you add or rename a file under `App/ProSlide/`, add it to the `ProSlideApp` target in `Package.swift` too — that is what the packaging script and CI build, so a file registered only in the pbxproj compiles in Xcode but is missing from the installed app.
+Both build systems use Swift 5 language mode, and the code hasn't been audited for strict concurrency. Fix sendability warnings in place rather than raising the language mode. Prefer the `.onChange(of:) { value in }` form, since the zero-parameter one needs macOS 14.
 
-Both build systems use Swift 5 language mode: `Package.swift` declares `swift-tools-version: 5.9` with no `swiftLanguageMode`, and the Xcode target sets `SWIFT_VERSION = 5.0`. The code has not been audited for strict concurrency, so treat sendability warnings as expected and fix them in place — do not turn the language mode up to silence one. For the same reason, prefer the pre-macOS-14 `.onChange(of:) { value in }` form over the zero-parameter one, which requires raising the deployment target.
-
-## Tests
 ```
 swift test
 ```
-`EngineSmokeTests` runs the conversion pipeline against 16:9 PDF/PPTX fixtures at every resolution preset (HD 1280x720, Full HD 1920x1080, 4K 3840x2160), asserting output size and that the render stays upright, plus a clamp test for pathological page dimensions. The PPTX path is skipped when LibreOffice is not installed.
+- `EngineSmokeTests`: PDF and PPTX at every resolution preset (HD, Full HD, 4K), checking output size and orientation. The PPTX test is skipped without LibreOffice.
+- `ConversionQueueTests`: the batch queue through an injected converter, with no window or LibreOffice.
+- `ProPresenterPackageTests`: the `.pro` writer, decoded with an independent protobuf reader and compared with `real.pro`. These tests can't prove ProPresenter accepts a file; only an import can.
 
-`ConversionQueueTests` drives the batch queue through an injected converter, so it needs neither a window nor LibreOffice. It covers name-ordered sequencing, per-file error isolation, re-queuing a failure on the next run, security-scope balance, aggregate progress arithmetic, cancellation, unsupported-file reporting, and bin scanning.
+CI runs all of this on a macOS runner and packages the app with the install script.
 
-`ProPresenterPackageTests` covers the `.pro` path with no window, no LibreOffice and no real JPEG decoding — pixel sizes are injected. It decodes the generated manifest with an independent protobuf reader (`ProtoReader.swift`), so a mistake shared between a writer and its decoder cannot pass unnoticed, and it stages each deck into a throwaway stand-in for ProPresenter's document root and checks that every path the manifest names resolves to a real file there, linked to the deck's own bytes rather than copied. `real.pro` in `Fixtures/` is a presentation ProPresenter exported itself; it is the ground truth for how media is referenced.
+## Security
+- Untrusted PDFs and PPTX files are parsed by PDFKit and LibreOffice. A crafted file could try to exploit a parser bug, so keep macOS and LibreOffice updated.
+- Output is capped at 8192 px per side and 300 pages per document, and filenames are sanitised.
+- The app is unsandboxed because it launches LibreOffice. It makes no network connections.
 
-CI runs all three suites on a macOS runner on every push, and packages the app with the same script the install instructions use.
-
-## Using it
-
-1. **Add your file or files.** Drag PDFs and `.pptx` files onto the panel, or click it to pick them. You can add more at any time.
-2. **Check the resolution.** Leave it at Full HD unless you have a reason; that is the right choice for most ProPresenter services.
-3. **Press Convert** (or ⌘↩). One at a time they run, and the panel shows what each file is doing. If a file fails, the rest still convert and the failure tells you why.
-4. **Wait for the Bin** to fill in on the right. Each document gets its own `Document Name JPEGs` folder, and the bin remembers everything you have converted, so it is still there next time you open the app. Documents are listed alphabetically.
-5. **Drag the card into ProPresenter.** That is the whole job. Every slide in that document arrives, in order, named `Document-001.jpg`, `Document-002.jpg`, and so on.
-
-Each document also gets a `Name.pro` in the bin's `Pro` folder, so dragging its card into ProPresenter brings the deck in as a single named presentation with every slide attached. A control at the top of the bin switches between that and the plain JPEG folder — see [Presentations](#presentations).
-
-If you need a slide that is not the whole document, drag its individual thumbnail instead of the card. And if you want the images somewhere other than ProPresenter, **Save…** copies a document's set to any folder you choose.
-
-Two details worth knowing: converting the same file again creates a second folder rather than overwriting the first, and **Stop** halts a batch without losing the files you have not converted yet.
-
-## Dragging into ProPresenter
-- The whole document card in the bin is a drag source. Drop it on ProPresenter and the document's `Name JPEGs` folder arrives as a sequence, so no selection step and no trip to Finder are needed.
-- Drag an individual thumbnail to move just that one image.
-- **Save…** copies a document's set to a folder you choose.
-- A document card also drags its `.pro` presentation once one has been written, which imports the deck as a single named presentation. See [Presentations](#presentations).
-
-A card drag carries **one** thing, never a pile of loose files. That is deliberate. A SwiftUI drag hands over a single `NSItemProvider`, so a list of URLs packed into one item does not arrive as many files — the receiving app takes the first and you get one slide. Finder avoids this by writing one pasteboard item per file, which requires an AppKit drag session. A card therefore hands over the deck's `.pro` (which is why that one file references every image), falling back to the document's JPEG folder before one has been written. If a deck ever needs only a middle range of slides, the bin has no control for that; the thumbnail drag is the only way to cherry-pick, one image at a time.
-
-## Presentations
-The control at the top of the bin chooses what a card drag hands over:
-
-- **JPEG Folder** — the document's `Name JPEGs` folder. ProPresenter imports it as a plain sequence, which is what you want when pulling slides into a presentation you already have.
-- **.pro Presentation** — a single `Name.pro` from the bin's `Pro` folder, which ProPresenter opens as **one named presentation with every slide attached**.
-
-Every document gets its `.pro` written regardless of the setting, so switching is instant and a card whose presentation is still being written falls back to its JPEG folder rather than doing nothing. **Save…** copies a document's JPEGs to a folder you choose.
-
-The `.pro` is **tied to the machine whose ProPresenter library it was written against**. ProSlide links each deck's images into that library's own `Media/Imported` tree — a link is a second name for the same bytes, so nothing is copied and a 300-page deck costs one set of files — and the presentation names them from there. That is what makes the import find the images without ProSlide holding a second set. ProPresenter itself may then copy the media into its own store, exactly as it does for any presentation it imports; that is its behaviour and not something ProSlide does. Clear the bin and the links go with it, leaving the presentation naming media that is no longer staged. Moving a `.pro` to another machine gives placeholders instead of pictures; **JPEG Folder** is the portable option.
-
-If ProPresenter's folder cannot be found or written to, no presentation is written and the card says so, then falls back to dragging its JPEG folder — which always works. ProPresenter's default location is `~/Documents/ProPresenter`; if you have moved your library, the paths point wherever `PathSettings.proPaths` says, or at that default if it does not.
-
-If you would rather pull slides into a presentation you already have, drag an individual thumbnail instead — one image at a time.
-
-Presentations are kept in their own `Pro` folder rather than inside a deck's folder, because ProPresenter imports a folder containing a `.pro` as a *presentation* rather than as a sequence of slides — which would quietly break the JPEG Folder option. A deck folder therefore holds JPEGs and nothing else. **Presentations** in the bin reveals the folder in Finder, and **Clear** empties it along with the documents. Each card shows whether its `.pro` is ready, and **Rebuild** rewrites one after its JPEGs changed.
-
-One deliberate omission: generated slides carry no playback duration, so a slide holds until you click rather than advancing on a timer. ProPresenter's own announcement exports set ten seconds, which is right for announcements and wrong for a sermon deck.
-
-### About the `.pro` format
-ProPresenter 7 and later store presentations as Google Protocol Buffers messages rather than the XML that version 6 used. The schema is community-reverse-engineered and is **not** created, endorsed or supported by Renewed Vision. ProSlide writes it directly — `ProtobufWriter.swift` is a small wire-format writer and `ProPresenterDocument.swift` describes the handful of messages a deck of still images needs — so there is no `protoc` step and no new dependency.
-
-`Tests/FileConverterTests/Fixtures/real.pro` is a presentation ProPresenter exported itself — 41 slides, 82 media URLs, and not one byte of image data in the whole 78 KB file. It is the ground truth for everything below, and the reason a `.pro` has to point at media rather than carry it.
-
-A presentation is a flat list of *cues*, one per slide, collected into a single cue group. The details that decide whether a deck opens with images or with placeholders, each of which was wrong at least once:
-
-- **A cue holds exactly one action, and it is a presentation slide.** The image is an element *inside* that slide, at `10.23.2.1.1.1.9.3.2`. Real presentations contain **no media actions at all** — the export has 41 cues and 41 presentation-slide actions. An earlier version of this writer emitted a blank canvas plus a separate `ACTION_TYPE_MEDIA`, which produced valid protobuf but nothing ProPresenter could read.
-- **Media uses URL root `ROOT_SHOW` (10)**, resolved against ProPresenter's own document root. All 82 media URLs in `real.pro` use it.
-- **Media is staged into that root first.** A `.pro` cannot carry image data — the schema has no field for it, and `real.pro` is 78 KB of metadata with no image bytes anywhere — so the images must already exist somewhere for the manifest to name. ProSlide therefore *links* each deck's JPEGs into `Media/Imported/<deck>/<item>/`, which is exactly the layout `real.pro` records, and writes those paths. A link is a second directory entry for the same inode, so the bin still holds the only copy of the bytes and nothing is duplicated. Where the two cannot share an inode — a ProPresenter library on another disk — it copies instead, which costs the bytes but keeps the deck readable. **Nothing in the manifest ever climbs out of the root with `..`: no real presentation does, and it is the likeliest reason a deck used to import as placeholders.**
-- **`absolute_string` is the full `file://` URL** of the staged file, which ProPresenter percent-encodes.
-- **`metadata.format` is uppercase** (`JPG`).
-- **Cue groups must name the cues they contain by the cues' own identifiers.** Minting a group's identifiers independently leaves it pointing at cues that do not exist. Note the group lists cues in slide-list order, which need not match their order in the file.
-- **No arrangements.** There is no `arrangements` or `selected_arrangement` field here, because `real.pro` records neither. They were an earlier guess, and wrong.
-
-ProPresenter's document root is discovered rather than assumed: `PathSettings.proPaths` if it exists, otherwise `~/Documents/ProPresenter`. If you have moved your installation in ProPresenter's preferences and it does not use that settings file, the media paths will point at the wrong place.
-
-`ProPresenterPackageTests` pins all of the above. Always keep a backup of anything you have already made, and test on a copy.
-
-## Conversion behavior
-- PDF: PDFKit/Core Graphics renders each page directly to JPEG.
-- PPTX: the app runs LibreOffice headlessly to make a temporary PDF, then renders that PDF to JPEG.
-- JPEG quality is always ImageIO's maximum (1.0). The quality slider was removed on purpose: the renders are already capped at 8192 px per side, so a lower-quality knob only traded away fidelity. Note this is maximum lossy quality, not lossless — output remains 4:2:0 subsampled.
-- A batch reuses one LibreOffice profile across all its files, since creating a user profile is a real per-run cost.
-- LibreOffice fidelity depends on installed fonts and PowerPoint-specific effects. For the closest possible Microsoft Office rendering, a future version can add PowerPoint automation as an optional renderer.
-
-## Security considerations
-- ProSlide opens untrusted PDFs and PowerPoint files with Apple's PDFKit and LibreOffice. As with any document viewer, a malicious file could attempt to exploit a parser bug and run code on your machine, so keep LibreOffice and macOS updated. The app makes no network connections and stores no credentials.
-- As a guard against crafted documents with extreme page dimensions or page counts, rendering clamps every output image to at most 8192 px per side and a document to at most 300 pages.
-- The app is unsandboxed because it launches LibreOffice as a child process, and it takes a security-scoped read scope on every document you import, releasing it once the document is converted or removed.
-
-## Rust extension point
-The UI and Apple PDF APIs deliberately remain Swift-native. A Rust core is useful for future cross-platform batch queues, naming/collision policy, and image-processing work, but it should not replace PDFKit or LibreOffice (the two components doing document rendering). This MVP keeps the app dependency-free and lightweight while leaving that core as a clean future module.
+## Possible future work
+A Rust core for batch queuing and image processing, and PowerPoint automation as an optional renderer for closer Office fidelity. PDFKit and LibreOffice stay as the renderers.
