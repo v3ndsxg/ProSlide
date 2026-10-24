@@ -1,0 +1,14 @@
+# The download tools packaged into ProSlide.app, pinned to exact stable releases.
+# Scripts/fetch-tools.sh downloads each one, refuses to continue unless its
+# SHA-256 matches, and make-app-bundle.sh copies them into the app. Apple Silicon only.
+#
+# To update, run Scripts/update-tools.sh, check its output against each project's
+# release page, and change this file in a reviewed pull request.
+#
+# kind: "file" is the executable itself; "zip" is an archive holding one file
+# named after the tool.
+#
+# name    version     kind  sha256                                                            url
+yt-dlp    2026.10.21  file  7a6fe71d7d680f1fb0ac18d4949873d77db2859e90017c0f44bd94b23be4ee40  https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.21/yt-dlp_macos
+ffmpeg    9.0.2       zip   c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924  https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip
+deno      2.9.8       zip   9f0bf660393da2eaff044cdc7444cb08c73f235849b61d224d825a194ce7c98e  https://github.com/denoland/deno/releases/download/v2.9.8/deno-aarch64-apple-darwin.zip
