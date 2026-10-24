@@ -387,38 +387,33 @@ struct ContentView: View {
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1).truncationMode(.middle)
                 Text(item.detail).font(.caption).foregroundStyle(.secondary)
-                switch item.status {
-                case .downloading(let value):
-                    ProgressView(value: value)
-                case .finishing:
-                    ProgressView().progressViewStyle(.linear)
-                default:
-                    EmptyView()
+                if case .downloading = item.status {
+                    if let fraction = item.fraction {
+                        ProgressView(value: fraction)
+                    } else {
+                        ProgressView().progressViewStyle(.linear)
+                    }
                 }
+                Text(item.statusLine)
+                    .font(.caption)
+                    .foregroundStyle(Color.blue)
+                    .lineLimit(2)
             }
-            Spacer(minLength: 4)
-            Text(activeLabel(item.status))
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(Color.blue)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(Color.blue.opacity(0.15), in: Capsule())
-                .fixedSize()
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+        .contextMenu {
+            Button("Show Download Log") { showDownloadLog() }
+        }
     }
 
-    private func activeLabel(_ status: DownloadItem.Status) -> String {
-        switch status {
-        case .queued: "Waiting"
-        case .downloading(let value): "\(Int(value * 100))%"
-        case .finishing: "Finishing\u{2026}"
-        case .done, .failed: ""
-        }
+    private func showDownloadLog() {
+        DownloadLog.shared.ensureExists()
+        BinOpener.reveal(DownloadLog.shared.fileURL)
     }
 
     /// A downloaded video or audio file: the same card shape as a deck, but the
@@ -453,6 +448,7 @@ struct ContentView: View {
         .contextMenu {
             Button("Show in Finder") { BinOpener.reveal(item.fileURL) }
             Button("Save a copy\u{2026}") { saveDownloadTarget = item; showingSaveImporter = true }
+            Button("Show Download Log") { showDownloadLog() }
             Divider()
             Button("Remove", role: .destructive) {
                 do {

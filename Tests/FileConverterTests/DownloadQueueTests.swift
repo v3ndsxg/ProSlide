@@ -80,8 +80,8 @@ final class DownloadQueueTests: XCTestCase {
         let order = Recorder()
         let queue = makeQueue(fetch: { url, info, format, quality, _, progress in
             order.add("start \(url.lastPathComponent)")
-            progress(.downloading(0.5))
-            order.add("end \(url.lastPathComponent) \(format.rawValue) \(quality.rawValue) \(info.title)")
+            progress(DownloadProgress(phase: .video, fraction: 0.5))
+            order.add("end \(url.lastPathComponent) \(format.rawValue) \(quality.rawValue) \(info?.title ?? "no lookup")")
             return URL(fileURLWithPath: "/Downloads/\(url.lastPathComponent).mp4")
         })
         var binChanges = 0
@@ -171,8 +171,8 @@ final class DownloadQueueTests: XCTestCase {
 
     func testProgressOnlyMovesForwardAndNeverRevivesAFinishedItem() async throws {
         let queue = makeQueue(fetch: { _, _, _, _, _, progress in
-            progress(.downloading(0.6))
-            progress(.downloading(0.2))
+            progress(DownloadProgress(phase: .video, fraction: 0.6))
+            progress(DownloadProgress(phase: .video, fraction: 0.2))
             try await Task.sleep(nanoseconds: 100_000_000)
             return URL(fileURLWithPath: "/Downloads/a.mp4")
         })
@@ -181,6 +181,125 @@ final class DownloadQueueTests: XCTestCase {
         try await waitUntil { !queue.isDownloading }
 
         guard case .done = queue.items[0].status else { return XCTFail("\(queue.items[0].status)") }
+    }
+
+    // MARK: - New behaviour
+
+    func testLinksAreLookedUpAFewAtATime() async throws {
+        let counter = Overlap()
+        let queue = makeQueue(lookUp: { url in
+            counter.begin()
+            try await Task.sleep(nanoseconds: 150_000_000)
+            counter.end()
+            return VideoInfo(title: url.lastPathComponent, duration: nil, maxHeight: 1080, isLive: false)
+        })
+
+        queue.linkText = (1...8).map { "https://example.com/video\($0)" }.joined(separator: "\n")
+        try await waitUntil { queue.pastedInfos.count == 8 }
+
+        XCTAssertEqual(counter.peak, DownloadQueue.simultaneousLookups, "three at once, never more")
+    }
+
+    func testALinkWhoseLookupFailedStillDownloadsWithoutOne() async throws {
+        let received = Recorder()
+        let queue = makeQueue(
+            lookUp: { _ in throw DownloadError.lookupTimedOut },
+            fetch: { url, info, _, _, _, _ in
+                received.add("\(url.lastPathComponent) lookup=\(info == nil ? "none" : "some")")
+                return URL(fileURLWithPath: "/Downloads/x.mp4")
+            }
+        )
+
+        queue.linkText = "https://example.com/slow"
+        try await waitUntil { queue.lookups["https://example.com/slow"] == .failed(DownloadError.lookupTimedOut.localizedDescription) }
+        queue.download()
+        try await waitUntil { !queue.isDownloading }
+
+        XCTAssertEqual(received.lines, ["slow lookup=none"])
+        XCTAssertEqual(queue.items.map(\.status), [.done(URL(fileURLWithPath: "/Downloads/x.mp4"))])
+    }
+
+    func testPressingDownloadWhileALookupIsRunningWaitsForItsResults() async throws {
+        let received = Recorder()
+        let queue = makeQueue(
+            lookUp: { url in
+                try await Task.sleep(nanoseconds: 300_000_000)
+                return VideoInfo(title: "Found", duration: nil, maxHeight: 1080, isLive: false)
+            },
+            fetch: { _, info, _, _, _, _ in
+                received.add(info?.title ?? "none")
+                return URL(fileURLWithPath: "/Downloads/x.mp4")
+            }
+        )
+
+        queue.linkText = "https://example.com/video"
+        queue.download()
+        try await waitUntil { !queue.isDownloading }
+
+        XCTAssertEqual(received.lines, ["Found"], "the download should start from the lookup, not without it")
+    }
+
+    func testAStalledDownloadOffersRetryAndRetryWorks() async throws {
+        let attempts = Counter()
+        let queue = makeQueue(fetch: { _, _, _, _, _, _ in
+            attempts.increment()
+            if attempts.value == 1 { throw DownloadError.timedOut }
+            return URL(fileURLWithPath: "/Downloads/ok.mp4")
+        })
+
+        queue.linkText = "https://example.com/video"
+        queue.download()
+        try await waitUntil { !queue.isDownloading }
+
+        let failed = try XCTUnwrap(queue.items.first)
+        XCTAssertEqual(failed.status, .failed(DownloadError.timedOut.localizedDescription))
+        XCTAssertTrue(failed.canRetry)
+
+        queue.retry(failed.id)
+        try await waitUntil { !queue.isDownloading }
+
+        XCTAssertEqual(queue.items.first?.status, .done(URL(fileURLWithPath: "/Downloads/ok.mp4")))
+        XCTAssertEqual(queue.items.first?.canRetry, false)
+        XCTAssertEqual(attempts.value, 2)
+    }
+
+    func testAVideoThatIsPrivateIsNotOfferedRetry() async throws {
+        let queue = makeQueue(fetch: { _, _, _, _, _, _ in throw DownloadError.privateVideo })
+        queue.linkText = "https://example.com/video"
+        queue.download()
+        try await waitUntil { !queue.isDownloading }
+
+        XCTAssertEqual(queue.items.first?.canRetry, false)
+    }
+
+    func testProgressNeverMovesBackToAnEarlierPhase() async throws {
+        let queue = makeQueue(fetch: { _, _, _, _, _, progress in
+            progress(DownloadProgress(phase: .merging))
+            progress(DownloadProgress(phase: .audio, fraction: 0.9))
+            try await Task.sleep(nanoseconds: 200_000_000)
+            return URL(fileURLWithPath: "/Downloads/a.mp4")
+        })
+        queue.linkText = "https://example.com/a"
+        queue.download()
+        try await waitUntil { queue.items.first.map { if case .downloading(let p) = $0.status { p.phase == .merging } else { false } } ?? false }
+        try await Task.sleep(nanoseconds: 80_000_000)
+        if case .downloading(let progress)? = queue.items.first?.status {
+            XCTAssertEqual(progress.phase, .merging, "a late audio update must not undo the merge")
+        }
+        try await waitUntil { !queue.isDownloading }
+
+        guard case .done = queue.items[0].status else { return XCTFail("\(queue.items[0].status)") }
+    }
+
+    func testTheCardSaysWhatItIsDoing() {
+        var item = DownloadItem(linkID: "x", url: URL(string: "https://example.com/x")!, format: .mp4, quality: .p1080, title: "Clip")
+        XCTAssertEqual(item.statusLine, "Waiting")
+        item.status = .downloading(DownloadProgress(phase: .video, fraction: 0.4, secondsLeft: 90))
+        XCTAssertTrue(item.statusLine.hasPrefix("Downloading video \u{00B7} 40%"), item.statusLine)
+        XCTAssertEqual(item.fraction, 0.4)
+        item.status = .downloading(DownloadProgress(phase: .merging))
+        XCTAssertNil(item.fraction)
+        XCTAssertTrue(item.isActive)
     }
 
     // MARK: - Helpers
@@ -221,6 +340,14 @@ final class DownloadQueueTests: XCTestCase {
         private var count = 0
         var value: Int { lock.lock(); defer { lock.unlock() }; return count }
         func increment() { lock.lock(); count += 1; lock.unlock() }
+    }
+
+    private final class Overlap: @unchecked Sendable {
+        private let lock = NSLock()
+        private var running = 0
+        private(set) var peak = 0
+        func begin() { lock.lock(); running += 1; peak = max(peak, running); lock.unlock() }
+        func end() { lock.lock(); running -= 1; lock.unlock() }
     }
 
     private final class Recorder: @unchecked Sendable {

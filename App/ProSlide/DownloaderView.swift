@@ -125,6 +125,9 @@ struct DownloaderView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: 620)
+        .contextMenu {
+            Button("Show Download Log") { showLog() }
+        }
     }
 
     private func linkRow(_ link: DownloadLink) -> some View {
@@ -163,12 +166,15 @@ struct DownloaderView: View {
         if let reason = link.unsupportedReason { return reason }
         switch lookup {
         case .found(let info)?:
-            var parts: [String] = []
+            var parts = [Self.site(of: link)]
             if let duration = info.duration { parts.append(Self.clock(duration)) }
             if let height = info.maxHeight { parts.append("up to \(height >= 2160 ? "4K" : "\(height)p")") }
-            return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
+            if downloads.format == .mp4, info.convertsToH264(at: downloads.quality) {
+                parts.append("will be converted to H.264")
+            }
+            return parts.joined(separator: " \u{00B7} ")
         case .failed(let reason)?: return reason
-        default: return "Looking up\u{2026}"
+        default: return "\(Self.site(of: link)) \u{00B7} checking\u{2026}"
         }
     }
 
@@ -181,28 +187,34 @@ struct DownloaderView: View {
         HStack(spacing: 10) {
             switch item.status {
             case .queued: Image(systemName: "clock").foregroundStyle(.secondary).frame(width: 18)
-            case .downloading, .finishing: ProgressView().controlSize(.small).frame(width: 18)
+            case .downloading: ProgressView().controlSize(.small).frame(width: 18)
             case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).frame(width: 18)
             case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).frame(width: 18)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title).lineLimit(1).truncationMode(.middle)
-                switch item.status {
-                case .queued:
-                    Text("Waiting").font(.caption).foregroundStyle(.secondary)
-                case .downloading(let value):
-                    Text("Downloading \(Int(value * 100))%").font(.caption).foregroundStyle(.secondary)
-                case .finishing:
-                    Text(item.format == .mp4 ? "Finishing\u{2026} converting if needed" : "Finishing\u{2026}")
-                        .font(.caption).foregroundStyle(.secondary)
-                case .done:
-                    Text("Saved to the bin").font(.caption).foregroundStyle(.secondary)
-                case .failed(let reason):
-                    Text(reason).font(.caption).foregroundStyle(.red).lineLimit(3)
-                }
+                Text(item.statusLine)
+                    .font(.caption)
+                    .foregroundStyle(isFailed(item) ? Color.red : .secondary)
+                    .lineLimit(3)
+            }
+            Spacer(minLength: 8)
+            if item.canRetry {
+                Button("Retry") { downloads.retry(item.id) }
+                    .disabled(downloads.isDownloading)
             }
         }
         .padding(.vertical, 3)
+    }
+
+    private func isFailed(_ item: DownloadItem) -> Bool {
+        if case .failed = item.status { return true }
+        return false
+    }
+
+    private func showLog() {
+        DownloadLog.shared.ensureExists()
+        BinOpener.reveal(DownloadLog.shared.fileURL)
     }
 
     // MARK: - Unavailable
@@ -242,6 +254,12 @@ struct DownloaderView: View {
         if downloads.isDownloading { return "Downloading\u{2026}" }
         let count = downloads.downloadableLinks.count
         return count > 1 ? "Download \(count) links" : "Download"
+    }
+
+    /// "youtube.com" from a link, for the line under a title.
+    private static func site(of link: DownloadLink) -> String {
+        let host = link.url?.host ?? link.text
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
     private static func clock(_ seconds: TimeInterval) -> String {
