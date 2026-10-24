@@ -78,7 +78,7 @@ public enum BinStorage {
     /// better home regardless.
     public static var rootURL: URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("ProSlide", isDirectory: true)
+            .appendingPathComponent(AppIdentity.current.dataFolderName, isDirectory: true)
         let bin = documents.appendingPathComponent("Bin", isDirectory: true)
         try? FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
         return bin

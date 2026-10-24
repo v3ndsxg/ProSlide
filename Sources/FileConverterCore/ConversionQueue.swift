@@ -98,7 +98,7 @@ public final class ConversionQueue: ObservableObject {
         package: PackageOperation? = nil,
         binRoot: URL = BinStorage.rootURL,
         presentationsDirectory: URL = BinStorage.presentationsDirectory,
-        legacyBin: URL? = BinStorage.legacyRootURL
+        legacyBin: URL? = AppIdentity.current.ownsLegacyBin ? BinStorage.legacyRootURL : nil
     ) {
         self.options = options
         self.convertOne = convert

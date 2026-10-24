@@ -66,7 +66,17 @@ struct ContentView: View {
 
     private var mainPane: some View {
         VStack(spacing: 18) {
-            Text("ProSlide").font(.largeTitle.weight(.semibold))
+            HStack(spacing: 10) {
+                Text(AppIdentity.current.displayName).font(.largeTitle.weight(.semibold))
+                if AppIdentity.current.isBeta {
+                    Text("BETA")
+                        .font(.caption.weight(.heavy))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.orange))
+                        .foregroundStyle(.black)
+                }
+            }
             Text("Turn PDFs and PowerPoint slides into dependable JPEG images.")
                 .foregroundStyle(.secondary)
 

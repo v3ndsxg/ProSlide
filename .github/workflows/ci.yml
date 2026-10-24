@@ -44,19 +44,36 @@ jobs:
         # App/ProSlide.xcodeproj is development-only (breakpoints and previews)
         # and is no longer built here; a hand-maintained pbxproj is exactly the
         # kind of file that breaks silently.
+        #
+        # Both variants are built and checked: this branch's default (the beta)
+        # and the production app, so a change to the script can't quietly break
+        # the build that ships from main.
         run: |
+          check_app() {
+            local name="$1" id="$2" folder="$3" beta="$4"
+            local APP="build/$name.app"
+            test -x "$APP/Contents/MacOS/ProSlide" || { echo "$name: missing executable"; exit 1; }
+            plutil -lint "$APP/Contents/Info.plist"
+            test -f "$APP/Contents/Resources/ProSlide.icns" || { echo "$name: missing icon"; exit 1; }
+            plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist"; }
+            test "$(plist CFBundlePackageType)" = APPL || { echo "$name: not an app bundle"; exit 1; }
+            test "$(plist CFBundleExecutable)" = ProSlide || { echo "$name: wrong executable name"; exit 1; }
+            test "$(plist CFBundleDisplayName)" = "$name" || { echo "$name: wrong display name"; exit 1; }
+            test "$(plist CFBundleIdentifier)" = "$id" || { echo "$name: wrong bundle id"; exit 1; }
+            test "$(plist ProSlideDataFolder)" = "$folder" || { echo "$name: wrong data folder"; exit 1; }
+            test "$(plist ProSlideIsBeta)" = "$beta" || { echo "$name: wrong beta flag"; exit 1; }
+            codesign --verify "$APP"
+            codesign -dv "$APP" 2>&1 | sed -n '1,4p'
+            du -sh "$APP"
+          }
+
           ./Scripts/make-app-bundle.sh release
-          APP=build/ProSlide.app
-          test -x "$APP/Contents/MacOS/ProSlide" || { echo "missing executable"; exit 1; }
-          plutil -lint "$APP/Contents/Info.plist"
-          test -f "$APP/Contents/Resources/ProSlide.icns" || { echo "missing icon"; exit 1; }
-          plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist"; }
-          test "$(plist CFBundlePackageType)" = APPL || { echo "not an app bundle"; exit 1; }
-          test "$(plist CFBundleExecutable)" = ProSlide || { echo "wrong executable name"; exit 1; }
-          test "$(plist CFBundleIdentifier)" = com.v3ndsxg.proslide || { echo "wrong bundle id"; exit 1; }
-          codesign --verify "$APP"
-          codesign -dv "$APP" 2>&1 | sed -n '1,4p'
-          du -sh "$APP"
+          check_app "ProSlide Beta" com.v3ndsxg.proslide.beta "ProSlide Beta" true
+
+          ./Scripts/make-app-bundle.sh release --stable
+          check_app "ProSlide" com.v3ndsxg.proslide ProSlide false
+          # The two builds must be able to sit side by side.
+          test -d "build/ProSlide Beta.app" || { echo "beta bundle missing after the stable build"; exit 1; }
 
       - name: Test
         # `shell: bash` implies -eo pipefail. Without it the pipeline's exit

@@ -113,4 +113,16 @@ These are planned for the `beta` branch and are not in `main` yet. New work is t
 - **Lyrics Formatter:** format lyrics with ease so they import into ProPresenter quickly.
 - **Same bin:** downloads and formatted lyrics land in the bin like any other deck, so they stay easy to drag or copy into ProPresenter.
 
+### Installing the beta
+The beta is a separate app, **ProSlide Beta**, with its own bundle ID (`com.v3ndsxg.proslide.beta`), an orange icon marked BETA, and its own folder at `~/Documents/ProSlide Beta/`. It installs beside the production app and never reads or changes its decks.
+
+```
+git clone --branch beta --single-branch https://github.com/v3ndsxg/ProSlide.git ProSlide-beta
+cd ProSlide-beta
+./Scripts/make-app-bundle.sh --install
+open "/Applications/ProSlide Beta.app"
+```
+
+Pull and rerun the script to update. On the `beta` branch the script builds the beta by default; `--stable` builds the production app from the same checkout. The values live in `Scripts/make-app-bundle.sh`, and the app reads them from its Info.plist (`AppIdentity.swift`).
+
 Longer term: a Rust core for batch queuing and image processing, and PowerPoint automation as an optional renderer for closer Office fidelity. PDFKit and LibreOffice stay as the renderers.
