@@ -379,14 +379,15 @@ struct ContentView: View {
     /// thumbnail, when its file lands in the bin. Nothing here can be dragged yet.
     private func activeRow(_ item: DownloadItem) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "arrow.down.circle")
-                .foregroundStyle(.secondary)
-                .frame(width: 56, height: 32)
+            activeThumbnail(item)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1).truncationMode(.middle)
-                Text(item.detail).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    FormatTag(text: item.format.rawValue.uppercased())
+                    if item.format == .mp4 { Text(item.quality.title).font(.caption).foregroundStyle(.secondary) }
+                }
                 if case .downloading = item.status {
                     if let fraction = item.fraction {
                         ProgressView(value: fraction)
@@ -411,6 +412,18 @@ struct ContentView: View {
         }
     }
 
+    /// A grey tile standing in for the thumbnail until the file arrives.
+    private func activeThumbnail(_ item: DownloadItem) -> some View {
+        var symbol = "arrow.down"
+        if case .downloading(let progress) = item.status, progress.phase >= .finishing { symbol = "arrow.triangle.2.circlepath" }
+        return ZStack {
+            Color.secondary.opacity(0.15)
+            Image(systemName: symbol).font(.system(size: 18)).foregroundStyle(.secondary)
+        }
+        .frame(width: 80, height: 46)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
     private func showDownloadLog() {
         DownloadLog.shared.ensureExists()
         BinOpener.reveal(DownloadLog.shared.fileURL)
@@ -427,8 +440,11 @@ struct ContentView: View {
                 Text(item.title)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1).truncationMode(.middle)
-                Text(item.detail)
-                    .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    FormatTag(text: item.kind.label)
+                    Text(ByteCountFormatter.string(fromByteCount: item.byteCount, countStyle: .file))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 4)
             if payload == nil {
@@ -472,8 +488,8 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 56, height: 32)
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .frame(width: 80, height: 46)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private func statusChip(_ status: DeckStatus) -> some View {

@@ -6,6 +6,7 @@ import SwiftUI
 /// Finished files, and the downloads still running, appear in the bin.
 struct DownloaderView: View {
     @EnvironmentObject private var downloads: DownloadQueue
+    @State private var cardHeight: CGFloat = 60
 
     var body: some View {
         VStack(spacing: 16) {
@@ -17,9 +18,8 @@ struct DownloaderView: View {
             if let reason = downloads.availability.error {
                 unavailable(reason)
             } else {
-                linkBox
+                linkCard
                 options
-                linkList
             }
 
             if let message = downloads.message {
@@ -33,30 +33,90 @@ struct DownloaderView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Links
+    // MARK: - The link card
 
-    private var linkBox: some View {
-        ZStack(alignment: .topLeading) {
-            TextEditor(text: $downloads.linkText)
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(6)
-            if downloads.linkText.isEmpty {
-                Text("Paste one link per line\u{2026}")
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 14)
-                    .allowsHitTesting(false)
+    /// One card: where links are pasted, then a row for each pasted link and for
+    /// each download, with the site's badge, its title and what it is doing.
+    private var linkCard: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 0) {
+                entry
+                if !downloads.links.isEmpty {
+                    ForEach(downloads.links) { link in
+                        Divider()
+                        linkRow(link)
+                    }
+                }
+                if !downloads.items.isEmpty {
+                    Divider()
+                    HStack {
+                        Text("Downloads")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        Spacer()
+                        Button("Clear") { downloads.clearFinished() }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                            .disabled(downloads.isDownloading)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    ForEach(downloads.items) { item in
+                        Divider()
+                        itemRow(item)
+                    }
+                }
             }
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
+            .padding(.horizontal, 2)
+            .padding(.vertical, 4)
+            .background(GeometryReader { proxy in
+                Color.clear.preference(key: CardHeightKey.self, value: proxy.size.height)
+            })
         }
-        .frame(maxWidth: 620, minHeight: 96, maxHeight: 96)
-        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.35)))
-        .overlay(alignment: .topTrailing) {
+        .onPreferenceChange(CardHeightKey.self) { cardHeight = $0 }
+        // A scroll view takes all the room it is offered. This sizes it to the
+        // card, up to a limit, so the options stay right under it.
+        .frame(maxWidth: 620)
+        .frame(height: min(cardHeight, 340))
+        .contextMenu {
+            Button("Show Download Log") { showLog() }
+        }
+    }
+
+    private var entry: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "link")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 28, height: 28)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $downloads.linkText)
+                    .font(.system(size: 13, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .frame(height: entryHeight)
+                if downloads.linkText.isEmpty {
+                    Text("Paste a video link, or several, one per line\u{2026}")
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 5)
+                        .padding(.top, 5)
+                        .allowsHitTesting(false)
+                }
+            }
             Button("Paste") { paste() }
-                .controlSize(.small)
-                .padding(8)
+                .buttonStyle(.borderedProminent)
         }
+        .padding(12)
+    }
+
+    /// One line when empty, growing with what is pasted up to a few lines.
+    private var entryHeight: CGFloat {
+        let lines = max(downloads.linkText.split(separator: "\n", omittingEmptySubsequences: false).count, 1)
+        return min(max(CGFloat(lines) * 18 + 10, 30), 100)
     }
 
     private func paste() {
@@ -77,19 +137,11 @@ struct DownloaderView: View {
                 .frame(width: 230)
             }
             if downloads.format == .mp4 {
-                GridRow {
-                    Text("Quality")
-                    HStack(spacing: 10) {
-                        Picker("Quality", selection: $downloads.quality) {
-                            // Qualities no pasted link offers are greyed out.
-                            ForEach(DownloadQuality.allCases) { quality in
-                                Text(quality.title).tag(quality)
-                                    .disabled(!downloads.isOffered(quality))
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 130)
-                        Text(qualityHint).font(.caption).foregroundStyle(.secondary)
+                GridRow(alignment: .top) {
+                    Text("Quality").padding(.top, 6)
+                    VStack(alignment: .leading, spacing: 6) {
+                        QualityTabs(selection: $downloads.quality, isOffered: { downloads.isOffered($0) })
+                        QualityAdviceText(advice: QualityAdvice.make(selected: downloads.quality, infos: downloads.pastedInfos))
                     }
                 }
             }
@@ -97,64 +149,37 @@ struct DownloaderView: View {
         .frame(maxWidth: 620, alignment: .leading)
     }
 
-    private var qualityHint: String {
-        if !downloads.isOffered(downloads.quality) {
-            return "None of these links offer \(downloads.quality.title). Each downloads at its best."
-        }
-        return "Up to this quality. A video without it downloads at its best."
-    }
-
-    private var linkList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 4) {
-                if !downloads.items.isEmpty {
-                    HStack {
-                        Text("Downloads").font(.headline)
-                        Spacer()
-                        Button("Clear") { downloads.clearFinished() }
-                            .disabled(downloads.isDownloading)
-                    }
-                    ForEach(downloads.items) { itemRow($0) }
-                }
-                if !downloads.links.isEmpty {
-                    Text("Pasted links").font(.headline)
-                        .padding(.top, downloads.items.isEmpty ? 0 : 10)
-                    ForEach(downloads.links) { linkRow($0) }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: 620)
-        .contextMenu {
-            Button("Show Download Log") { showLog() }
-        }
-    }
-
     private func linkRow(_ link: DownloadLink) -> some View {
         let lookup = downloads.lookups[link.id]
-        return HStack(spacing: 10) {
+        return HStack(spacing: 11) {
+            SiteBadgeView(badge: SiteBadge.forHost(link.url?.host))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title(for: link, lookup: lookup))
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1).truncationMode(.middle)
+                if let detail = detail(for: link, lookup: lookup) {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(link.unsupportedReason != nil || isFailure(lookup) ? Color.red : .secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 8)
             Group {
                 if link.unsupportedReason != nil {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 } else {
                     switch lookup {
-                    case .found?: Image(systemName: "checkmark.circle.fill").foregroundStyle(.secondary)
+                    case .found?: Image(systemName: "checkmark").foregroundStyle(.green)
                     case .failed?: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
                     default: ProgressView().controlSize(.small)
                     }
                 }
             }
             .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title(for: link, lookup: lookup)).lineLimit(1).truncationMode(.middle)
-                if let detail = detail(for: link, lookup: lookup) {
-                    Text(detail).font(.caption)
-                        .foregroundStyle(link.unsupportedReason != nil || isFailure(lookup) ? Color.red : .secondary)
-                        .lineLimit(2)
-                }
-            }
         }
-        .padding(.vertical, 3)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
     }
 
     private func title(for link: DownloadLink, lookup: LinkLookup?) -> String {
@@ -184,27 +209,38 @@ struct DownloaderView: View {
     }
 
     private func itemRow(_ item: DownloadItem) -> some View {
-        HStack(spacing: 10) {
-            switch item.status {
-            case .queued: Image(systemName: "clock").foregroundStyle(.secondary).frame(width: 18)
-            case .downloading: ProgressView().controlSize(.small).frame(width: 18)
-            case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).frame(width: 18)
-            case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).frame(width: 18)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title).lineLimit(1).truncationMode(.middle)
+        HStack(spacing: 11) {
+            SiteBadgeView(badge: SiteBadge.forHost(item.url.host))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1).truncationMode(.middle)
+                if let fraction = item.fraction {
+                    ProgressView(value: fraction)
+                }
                 Text(item.statusLine)
                     .font(.caption)
-                    .foregroundStyle(isFailed(item) ? Color.red : .secondary)
+                    .foregroundStyle(statusColor(item))
                     .lineLimit(3)
             }
             Spacer(minLength: 8)
             if item.canRetry {
                 Button("Retry") { downloads.retry(item.id) }
                     .disabled(downloads.isDownloading)
+            } else if case .done = item.status {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+    }
+
+    private func statusColor(_ item: DownloadItem) -> Color {
+        switch item.status {
+        case .failed: .red
+        case .downloading: .blue
+        default: .secondary
+        }
     }
 
     private func isFailed(_ item: DownloadItem) -> Bool {
@@ -269,4 +305,10 @@ struct DownloaderView: View {
             ? String(format: "%d:%02d:%02d", hours, minutes, secs)
             : String(format: "%d:%02d", minutes, secs)
     }
+}
+
+/// The height of the link card's content, so its scroll view can match it.
+private struct CardHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 60
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
