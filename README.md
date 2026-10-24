@@ -16,8 +16,8 @@ The app is ad-hoc signed and not notarized, so Gatekeeper may object on first la
 
 ### Should you trust it?
 - MIT-licensed and small enough to read end to end.
-- No network code, no credentials, no Keychain.
-- It launches one external program, LibreOffice, and only for PowerPoint files.
+- No credentials and no Keychain. The production app has no network code. The beta's Downloader reaches the internet only through `yt-dlp`, when you press Download on a link you pasted (see [Beta features](#beta-features)).
+- It launches LibreOffice for PowerPoint files. The beta also launches `yt-dlp`, `ffmpeg` and Deno for downloads.
 - The real risk is the documents: PDFKit and LibreOffice parse files you open, as Preview and Keynote do. See [Security](#security).
 
 ## Using it
@@ -47,6 +47,7 @@ A drag hands over a single item, which is why a whole deck travels as one bundle
 ### Where files live
 - JPEGs: `~/Documents/ProSlide/Bin/<Name> JPEGs/`, holding JPEGs and nothing else.
 - Presentations: `~/Documents/ProSlide/Pro/<Name>.probundle`. They're kept apart from the JPEG folders because ProPresenter imports a folder holding a presentation as that presentation. Each bundle has its own copy of the JPEGs, so a deck takes about twice the space until you **Clear**.
+- Downloads (beta): `~/Documents/ProSlide Beta/Downloads/<Title>.mp4` or `.mp3`, beside `Bin` and `Pro`. Each download works in a hidden `.work` folder and is moved in only when finished, so the bin never shows a partial file.
 - Both are under Documents because ProPresenter opens these paths itself, and macOS won't let it into another app's container. Decks in the old location (`~/Library/Application Support/FileConverter/Bin`) are moved across on the first scan.
 
 ## How the bundle works
@@ -75,10 +76,11 @@ The layout was copied from a bundle ProPresenter exported, then confirmed by imp
 ## Layout
 - `App/ProSlide/`: the SwiftUI app.
 - `App/ProSlide.xcodeproj`: development only (breakpoints, previews).
-- `Sources/FileConverterCore/`: the conversion engine, batch queue and `.probundle` packaging.
+- `Sources/FileConverterCore/`: the conversion engine, batch queue and `.probundle` packaging, plus the Downloader's engine and queue.
 - `Tests/FileConverterTests/`: tests and fixtures.
 - `Scripts/make-app-bundle.sh`: builds `ProSlide.app` from `swift build`.
 - `Scripts/check-probundle.py`: checks `.probundle` files with no Swift and no Mac (see below).
+- `Scripts/tools.lock`, `fetch-tools.sh`, `update-tools.sh`: the pinned download tools (see [Beta features](#beta-features)).
 
 ## Development
 Open `App/ProSlide.xcodeproj` in Xcode, or use the package directly. When you add or rename a file under `App/ProSlide/`, also add it to the `ProSlideApp` target in `Package.swift`, or it will be missing from the installed app.
@@ -90,9 +92,11 @@ swift test
 ```
 - `EngineSmokeTests`: PDF and PPTX at every resolution preset (HD, Full HD, 4K) and PPT at Full HD, checking output size and orientation. The PowerPoint tests are skipped without LibreOffice.
 - `ConversionQueueTests`: the batch queue through an injected converter and packager, against a temporary bin, with no window or LibreOffice.
+- `DownloadModelsTests`, `DownloadEngineTests`, `DownloadQueueTests`, `DownloadsBinTests`: the Downloader's links, command lines, progress, engine and queue, and the bin's handling of downloads. The engine runs against stand-in `yt-dlp` and `ffmpeg` scripts, so no network or real tools are needed.
+- `RealToolsTests`: the engine against the real packaged tools and a local web server. Skipped unless `PROSLIDE_TOOLS_DIR` points at the tools; CI sets it. It never reaches the internet.
 - `ProPresenterPackageTests`: the zip and `.pro` writers, read back with independent readers and the system's `unzip`, plus a real bundle built from each fixture. These tests can't prove ProPresenter accepts a file; only an import can.
 
-CI runs on a macOS runner. It packages the app with the install script, runs the tests, then checks the bundles they built with `Scripts/check-probundle.py`. If LibreOffice didn't install, the run shows a warning that the PowerPoint path wasn't checked. Each run uploads a **test-artifacts** zip holding the test output, the rendered JPEGs and the bundles, ready to drag into ProPresenter.
+CI runs on a macOS runner. It packages the app with the install script (both the beta and the production app), runs each packaged download tool from inside the app, runs the tests, then checks the bundles they built with `Scripts/check-probundle.py`. If LibreOffice didn't install, the run shows a warning that the PowerPoint path wasn't checked. Each run uploads a **test-artifacts** zip holding the test output, the rendered JPEGs and the bundles, ready to drag into ProPresenter.
 
 The checker is standard-library Python that shares no code with the Swift writer, so it runs anywhere, Linux included:
 
@@ -103,15 +107,29 @@ python3 -I Scripts/check-probundle.py Deck.probundle   # or a folder of them
 ## Security
 - Untrusted PDFs and PowerPoint files are parsed by PDFKit and LibreOffice. A crafted file could try to exploit a parser bug, so keep macOS and LibreOffice updated.
 - Output is capped at 8192 px per side and 300 pages per document, and filenames are sanitised.
-- The app is unsandboxed because it launches LibreOffice. It makes no network connections.
+- The app is unsandboxed because it launches LibreOffice (and, in the beta, the download tools).
+- The production app makes no network connections. In the beta, only `yt-dlp` does, and only for links you paste. Links are passed to it as arguments after `--`, never through a shell, and only `http` and `https` links are accepted. There is no cookie or login support.
+- The download tools are pinned to exact versions and SHA-256 checksums in `Scripts/tools.lock`. The build refuses any file that doesn't match, and no binary is committed to git. There is no in-app updater: updating means a reviewed change to the lock file.
 
 ## Beta features
-These are planned for the `beta` branch and are not in `main` yet. New work is tested there first and reaches `main` only once it has proven out.
+These live on the `beta` branch and are not in `main` yet. New work is tested there first and reaches `main` only once it has proven out.
 
-- **YouTube download:** save a video as MP4 or just its audio as MP3.
-- **Social media download:** the same MP4 and MP3 options for links from social media sites.
+### Downloader
+The **Downloader** tab saves videos as MP4 or just their audio as MP3, from YouTube and most social media sites, straight into the bin.
+
+1. Switch to the **Downloader** tab, and paste one link per line (or press **Paste**).
+2. Choose **MP4 Video** or **MP3 Audio**. For MP4, choose a quality: it means "up to this", and a video without it downloads at the best it has. Qualities none of the pasted links offer are greyed out. The default is 1080p, and the format and quality are remembered.
+3. Press **Download** (⌘↩). Links download one at a time, shown as cards in the bin while they run. **Stop** cancels and removes the partial file.
+4. Drag the finished card into ProPresenter. A video or audio card hands over the file itself.
+
+- **Compatibility:** MP4s are H.264 video with AAC audio, which plays in ProPresenter. YouTube serves 4K only as VP9 or AV1, so 4K is converted with the Mac's hardware H.264 encoder (software x264 if that fails), which takes extra time. Video that is already H.264 and AAC isn't re-encoded. MP3 is 320 kbps.
+- **Not supported:** playlists and channels (a link like `watch?v=…&list=…` downloads just that video), live streams, Intel Macs, and videos that need a login or cookies, such as private, age-restricted or some Instagram and Facebook videos. These say so rather than failing silently.
+- **Tools:** `yt-dlp` fetches, `ffmpeg` merges and converts, and Deno lets `yt-dlp` read YouTube. They are downloaded when you build the app, pinned to stable releases in `Scripts/tools.lock` with SHA-256 checksums, and kept in `ProSlide Beta.app/Contents/Resources/Tools` with their licenses in `THIRD_PARTY_NOTICES.txt`. They are Apple Silicon builds. `./Scripts/make-app-bundle.sh --no-tools` skips them.
+- **Updating the tools:** run `Scripts/update-tools.sh` to print the newest stable versions and checksums, compare them with each project's release page, and change `tools.lock` in a pull request. Stable `yt-dlp` releases can lag behind YouTube changes, so a site that stops working may need a newer release.
+- **Rights:** only download videos you own or have permission to use. YouTube's terms don't allow downloading, and `yt-dlp` and `ffmpeg` are GPL programs; if you give a built app to other people, include their licenses and sources, as the notices file points out.
+
+### Still to come
 - **Lyrics Formatter:** format lyrics with ease so they import into ProPresenter quickly.
-- **Same bin:** downloads and formatted lyrics land in the bin like any other deck, so they stay easy to drag or copy into ProPresenter.
 
 ### Installing the beta
 The beta is a separate app, **ProSlide Beta**, with its own bundle ID (`com.v3ndsxg.proslide.beta`), an orange icon marked BETA, and its own folder at `~/Documents/ProSlide Beta/`. It installs beside the production app and never reads or changes its decks.

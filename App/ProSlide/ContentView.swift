@@ -20,6 +20,7 @@ enum AppTab: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @EnvironmentObject private var queue: ConversionQueue
+    @EnvironmentObject private var downloads: DownloadQueue
     @AppStorage("selectedTab") private var tab: AppTab = .converter
     @State private var showingImporter = false
     @State private var showingSaveImporter = false
@@ -270,7 +271,7 @@ struct ContentView: View {
                 Spacer()
                 Button("Clear", role: .destructive) { confirmingClear = true }
                     .buttonStyle(.borderless)
-                    .disabled(queue.isConverting)
+                    .disabled(queue.isConverting || downloads.isDownloading)
             }
             // The mode only changes what a deck hands over; a download is always
             // the file itself.
@@ -291,6 +292,9 @@ struct ContentView: View {
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(downloads.activeItems) { item in
+                        activeRow(item)
+                    }
                     ForEach(queue.downloads) { item in
                         mediaRow(item)
                     }
@@ -307,7 +311,7 @@ struct ContentView: View {
         .background(Color.secondary.opacity(0.06))
     }
 
-    private var binCount: Int { queue.groups.count + queue.downloads.count }
+    private var binCount: Int { queue.groups.count + queue.downloads.count + downloads.activeItems.count }
 
     /// One line, naming what a drag does in the current mode.
     private var binHint: String {
@@ -368,6 +372,52 @@ struct ContentView: View {
             Button("Save a copy\u{2026}") { saveTarget = group; showingSaveImporter = true }
                 .disabled(queue.dragMode == .presentation && queue.presentation(for: group) == nil)
             Button("Rebuild presentation") { queue.buildPresentation(group) }
+        }
+    }
+
+    /// A download that is waiting or running: it becomes a normal card, with a
+    /// thumbnail, when its file lands in the bin. Nothing here can be dragged yet.
+    private func activeRow(_ item: DownloadItem) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.circle")
+                .foregroundStyle(.secondary)
+                .frame(width: 56, height: 32)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1).truncationMode(.middle)
+                Text(item.detail).font(.caption).foregroundStyle(.secondary)
+                switch item.status {
+                case .downloading(let value):
+                    ProgressView(value: value)
+                case .finishing:
+                    ProgressView().progressViewStyle(.linear)
+                default:
+                    EmptyView()
+                }
+            }
+            Spacer(minLength: 4)
+            Text(activeLabel(item.status))
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(Color.blue)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(Color.blue.opacity(0.15), in: Capsule())
+                .fixedSize()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+    }
+
+    private func activeLabel(_ status: DownloadItem.Status) -> String {
+        switch status {
+        case .queued: "Waiting"
+        case .downloading(let value): "\(Int(value * 100))%"
+        case .finishing: "Finishing\u{2026}"
+        case .done, .failed: ""
         }
     }
 
