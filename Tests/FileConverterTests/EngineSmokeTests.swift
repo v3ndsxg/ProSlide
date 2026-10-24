@@ -32,6 +32,17 @@ final class EngineSmokeTests: XCTestCase {
         }
     }
 
+    /// sample.ppt is sample.pptx saved by LibreOffice in the pre-2007 binary
+    /// format. It takes the same LibreOffice route, so it must come out the
+    /// same: one upright JPEG with the rectangle top-left.
+    func testPPTConversionProducesUprightJPEGs() async throws {
+        try XCTSkipUnless(hasLibreOffice(), "LibreOffice is not installed; skipping PPT path")
+        try await assertConversionOf(
+            kind: "ppt", file: "sample.ppt", preset: .fullHD,
+            canvasWidth: 960, canvasHeight: 540
+        )
+    }
+
     /// The app ships without a quality control on purpose, so the default must
     /// sit at ImageIO's ceiling. The engine still honours an explicit value.
     func testDefaultQualityIsMaximum() {
@@ -207,16 +218,8 @@ final class EngineSmokeTests: XCTestCase {
         try await body(directory)
     }
 
+    /// Asks the engine, so the tests look exactly where a conversion would.
     private func hasLibreOffice() -> Bool {
-        let candidates = [
-            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-            "/Applications/LibreOffice.app/Contents/MacOS/soffice.bin",
-            "/usr/local/bin/soffice",
-            "/opt/homebrew/bin/soffice"
-        ]
-        if candidates.contains(where: { FileManager.default.isExecutableFile(atPath: $0) }) { return true }
-        return ProcessInfo.processInfo.environment["PATH"]?
-            .split(separator: ":")
-            .contains(where: { FileManager.default.isExecutableFile(atPath: String($0) + "/soffice") }) ?? false
+        ConversionEngine.installedLibreOffice() != nil
     }
 }

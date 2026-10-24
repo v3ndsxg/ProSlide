@@ -22,8 +22,8 @@ public enum DragMode: String, CaseIterable, Identifiable, Sendable {
     /// you already have.
     case jpegFolder
 
-    /// The deck's `.pro`. ProPresenter opens it as one named presentation with
-    /// every slide already attached.
+    /// The deck's `.probundle`. ProPresenter imports it as one named
+    /// presentation with every slide, and every image, inside it.
     case presentation
 
     public var id: String { rawValue }
@@ -38,17 +38,22 @@ public enum DragMode: String, CaseIterable, Identifiable, Sendable {
 
 /// What a deck's card in the bin can do right now, shown as its status chip.
 public enum DeckStatus: Equatable, Sendable {
-    /// Its `.pro` is still being written, so a presentation drag has nothing to
-    /// hand over yet.
+    /// Its bundle is being written, so a presentation drag has nothing to hand
+    /// over yet.
     case preparing
+    /// It has no bundle and none is being written: a deck converted before
+    /// bundles existed, or one whose bundle was removed. Bundles are only built
+    /// by a conversion or a rebuild, never by opening the app.
+    case missing
     /// It can be dragged.
     case ready
-    /// Its `.pro` could not be written; the reason is what the operator needs.
+    /// Its bundle could not be written; the reason is what the operator needs.
     case failed(String)
 
     public var title: String {
         switch self {
         case .preparing: "Preparing\u{2026}"
+        case .missing: "Not built"
         case .ready: "Ready"
         case .failed: "Couldn\u{2019}t prepare"
         }
@@ -125,10 +130,10 @@ public enum BinStorage {
         }
     }
 
-    /// Where the `.pro` files are written.
+    /// Where the `.probundle` files are written.
     ///
     /// Deliberately *outside* each deck's folder. ProPresenter imports a folder
-    /// that contains a `.pro` as a presentation rather than as a sequence of
+    /// that contains a presentation as a presentation rather than as a sequence of
     /// slides, so leaving one there silently breaks the JPEG-folder drag: the
     /// deck arrives as a presentation instead of as loose images. A deck folder
     /// holds JPEGs and nothing else.
@@ -204,13 +209,37 @@ public struct ConversionGroup: Identifiable, Equatable, Sendable {
     public let folderURL: URL
     public let imageURLs: [URL]
 
-    /// The document's own name: the folder's name without its " JPEGs" suffix.
-    /// What the bin shows, and what the presentation is called.
+    /// What the bin shows: the folder's name without its " JPEGs" marker.
+    ///
+    /// A second conversion of the same document lands in `Name JPEGs 2`, which
+    /// shows as `Name 2`, so the two rows can be told apart. The presentation is
+    /// named by `documentName` instead.
     public var displayName: String {
-        let suffix = " JPEGs"
-        guard sourceName.hasSuffix(suffix) else { return sourceName }
-        let trimmed = String(sourceName.dropLast(suffix.count))
-        return trimmed.isEmpty ? sourceName : trimmed
+        guard let parts = nameParts else { return sourceName }
+        return parts.copy.map { "\(parts.document) \($0)" } ?? parts.document
+    }
+
+    /// The name of the document that was converted, with no folder marker and no
+    /// copy number: `Name JPEGs` and `Name JPEGs 2` are both `Name`.
+    ///
+    /// What the presentation is called and what its bundle is named, so a deck
+    /// arrives in ProPresenter under the file's own name however many times it
+    /// was converted. Converting again overwrites that bundle: the `Pro` folder
+    /// is a staging area, not storage.
+    public var documentName: String {
+        nameParts?.document ?? sourceName
+    }
+
+    /// The folder name split at its " JPEGs" marker, or nil when it has none.
+    private var nameParts: (document: String, copy: Int?)? {
+        let marker = " JPEGs"
+        guard let range = sourceName.range(of: marker, options: .backwards) else { return nil }
+        let document = String(sourceName[..<range.lowerBound])
+        let rest = sourceName[range.upperBound...]
+        guard !document.isEmpty else { return nil }
+        if rest.isEmpty { return (document, nil) }
+        guard rest.hasPrefix(" "), let copy = Int(rest.dropFirst()) else { return nil }
+        return (document, copy)
     }
 
     public init(sourceName: String, folderURL: URL) {
@@ -243,14 +272,14 @@ public struct PixelSize: Equatable, Sendable {
 public struct ProSlide: Equatable, Sendable {
     public let imageURL: URL
     public let pixelSize: PixelSize
-    /// Shown in ProPresenter's slide list. Defaults to the filename, which is
-    /// what ProPresenter itself uses for imported media.
+    /// The cue's name and the slide's label in ProPresenter. Defaults to the
+    /// filename without its extension, as ProPresenter names imported media.
     public let label: String
 
     public init(imageURL: URL, pixelSize: PixelSize, label: String? = nil) {
         self.imageURL = imageURL
         self.pixelSize = pixelSize
-        self.label = label ?? imageURL.lastPathComponent
+        self.label = label ?? imageURL.deletingPathExtension().lastPathComponent
     }
 }
 
@@ -258,8 +287,7 @@ public enum ProPackageError: LocalizedError, Equatable {
     case noImages(String)
     case noPresentation(String)
     case unreadableImage(String)
-    case showRootUnavailable(String)
-    case stageFailed(String)
+    case tooLarge
     case writeFailed(String)
 
     public var errorDescription: String? {
@@ -269,12 +297,9 @@ public enum ProPackageError: LocalizedError, Equatable {
             "\(name) has no presentation yet, so there is nothing to save. "
                 + "The bin says why if one could not be written."
         case .unreadableImage(let name): "The size of \(name) could not be read."
-        case .showRootUnavailable(let path):
-            "ProPresenter's folder was not found at \(path). Open ProPresenter once, "
-                + "or move your library back, then Rebuild. Until then this card cannot drag a "
-                + "presentation; switch to JPEG Files to use its images."
-        case .stageFailed(let name):
-            "\(name) could not be linked or copied into ProPresenter's media folder."
+        case .tooLarge:
+            "The presentation would be larger than 4 GB, the most one bundle can hold. "
+                + "Switch to JPEG Files to use its images."
         case .writeFailed(let detail): "The presentation could not be written. \(detail)"
         }
     }
@@ -292,7 +317,7 @@ public enum ConversionError: LocalizedError, Equatable {
 
     public var errorDescription: String? {
         switch self {
-        case .unsupportedFile: "Choose a PDF or PowerPoint (.pptx) file."
+        case .unsupportedFile: "Choose a PDF or PowerPoint (.pptx or .ppt) file."
         case .libreOfficeUnavailable: "LibreOffice was not found. Install LibreOffice or choose a PDF."
         case .libreOfficeFailed(let detail): "LibreOffice could not convert this PowerPoint file. \(detail)"
         case .libreOfficeTimedOut(let seconds):

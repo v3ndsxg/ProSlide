@@ -5,6 +5,13 @@ import PDFKit
 import UniformTypeIdentifiers
 
 public struct ConversionEngine {
+    /// PowerPoint formats, converted to PDF by LibreOffice first. `.ppt` is the
+    /// pre-2007 binary format; LibreOffice reads both.
+    public static let powerPointExtensions: Set<String> = ["pptx", "ppt"]
+
+    /// Every extension ProSlide converts.
+    public static let supportedExtensions: Set<String> = powerPointExtensions.union(["pdf"])
+
     /// How long LibreOffice gets to turn one PowerPoint file into a PDF before it
     /// is stopped. A hung `soffice` would otherwise hold the whole batch forever.
     public var libreOfficeTimeout: TimeInterval
@@ -29,7 +36,7 @@ public struct ConversionEngine {
         progress: @Sendable (Double) async -> Void
     ) async throws -> URL {
         let extensionName = input.pathExtension.lowercased()
-        guard extensionName == "pdf" || extensionName == "pptx" else {
+        guard ConversionEngine.supportedExtensions.contains(extensionName) else {
             throw ConversionError.unsupportedFile
         }
 
@@ -39,7 +46,7 @@ public struct ConversionEngine {
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 
         let pdfURL: URL
-        if extensionName == "pptx" {
+        if ConversionEngine.powerPointExtensions.contains(extensionName) {
             await progress(0.05)
             pdfURL = try await makePDF(
                 from: input,
@@ -181,20 +188,45 @@ public struct ConversionEngine {
     }
 
     private func libreOfficeExecutable() throws -> URL {
+        guard let found = ConversionEngine.installedLibreOffice() else {
+            throw ConversionError.libreOfficeUnavailable
+        }
+        return found
+    }
+
+    /// The `soffice` ProSlide would run, or nil when LibreOffice is not installed:
+    /// the usual install locations first, then wherever macOS says LibreOffice
+    /// is, then `PATH`.
+    ///
+    /// `~/Applications` is listed because an app can be installed there, and it
+    /// is invisible to a search of `/Applications` alone — which is how an
+    /// installed LibreOffice was reported as missing.
+    public static func installedLibreOffice() -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let knownLocations = [
             "/Applications/LibreOffice.app/Contents/MacOS/soffice",
             "/Applications/LibreOffice.app/Contents/MacOS/soffice.bin",
+            "\(home)/Applications/LibreOffice.app/Contents/MacOS/soffice",
             "/usr/local/bin/soffice",
             "/opt/homebrew/bin/soffice"
         ]
         if let path = knownLocations.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             return URL(fileURLWithPath: path)
         }
+        // Anywhere else Launch Services knows about: another volume, a renamed
+        // app, a managed install.
+        if let apps = LSCopyApplicationURLsForBundleIdentifier("org.libreoffice.script" as CFString, nil)?
+            .takeRetainedValue() as? [URL] {
+            for app in apps {
+                let candidate = app.appendingPathComponent("Contents/MacOS/soffice")
+                if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
+            }
+        }
         for directory in (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":") {
             let candidate = String(directory) + "/soffice"
             if FileManager.default.isExecutableFile(atPath: candidate) { return URL(fileURLWithPath: candidate) }
         }
-        throw ConversionError.libreOfficeUnavailable
+        return nil
     }
 
     private func makeOutputDirectory(for input: URL, in destination: URL) throws -> URL {

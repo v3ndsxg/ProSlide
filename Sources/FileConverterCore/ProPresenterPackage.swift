@@ -3,66 +3,55 @@ import Foundation
 import ImageIO
 #endif
 
-/// Turns a converted deck's JPEGs into a ProPresenter presentation: one `.pro`
-/// file that opens as a named presentation with every image already attached.
+/// Turns a converted deck's JPEGs into a ProPresenter bundle: one `.probundle`
+/// that imports as a named presentation with every image inside it.
 ///
-/// The `.pro` is written to `destinationDirectory` — the bin's `Pro` folder — not
-/// into the deck's own folder. ProPresenter imports a folder containing a `.pro`
-/// as a presentation rather than as a sequence of slides, so a `.pro` left
-/// beside a deck's JPEGs turns a JPEG-folder drag into a presentation import.
+/// A bundle is a zip holding `<Name>.pro` and the images under `Media/Assets/`.
+/// The manifest names each image relative to the bundle, so the file works on
+/// any machine and after the bin is cleared: on import ProPresenter copies the
+/// images into its own media store, with media management on or off.
 ///
-/// The images are *linked* into ProPresenter's own media tree first, at
-/// `Media/Imported/…` under its document root, which is exactly where
-/// `Fixtures/real.pro` records its own media living. A link is a second name for
-/// the same bytes, so the deck's JPEGs are still written once, in the bin, and
-/// ProPresenter's tree only adds a directory entry — a 300-page deck costs one
-/// set of files rather than two. Where the volume forbids a link (a ProPresenter
-/// library on another disk, say) it falls back to copying, which costs the bytes
-/// but keeps the presentation readable.
+/// ProSlide never reads, writes or deletes anything in ProPresenter's own
+/// folders. The bundle is the whole hand-over.
 ///
-/// The trade-off is that a `.pro` is tied to the machine whose ProPresenter
-/// library holds it. Moving it elsewhere, or clearing the bin, leaves it naming
-/// media that is no longer staged; the JPEG Files drag is the portable option.
+/// The bundle is written to `destinationDirectory` — the bin's `Pro` folder —
+/// not into the deck's own folder. ProPresenter imports a folder containing a
+/// presentation as a presentation rather than as a sequence of slides, so a
+/// bundle left beside a deck's JPEGs would turn a JPEG-folder drag into a
+/// presentation import.
+///
+/// The cost is space: the bundle holds a second copy of the deck's JPEGs.
 public enum ProPresenterPackage {
 
     /// The extension ProPresenter gives these.
-    public static let fileExtension = "pro"
+    public static let fileExtension = "probundle"
 
-    /// Places one image at its staged path. Defaults to a hard link, which adds
-    /// a directory entry and no bytes; tests inject one that fails, to reach the
-    /// copy fallback.
-    typealias MediaLinker = (URL, URL) throws -> Void
+    /// Appended while a bundle is being written. A bundle is only ever seen
+    /// under its real name once it is complete, so one cut short by a crash or
+    /// a quit is never offered as finished.
+    static let partialExtension = "partial"
 
     // MARK: - Packaging
 
-    /// Writes the presentation for `group` and returns the file written.
+    /// Writes the bundle for `group` and returns the file written.
     ///
     /// - Parameters:
     ///   - group: the converted deck to package.
-    ///   - destinationDirectory: where to write the `.pro`. Defaults to the
+    ///   - destinationDirectory: where to write the bundle. Defaults to the
     ///     `Pro` folder alongside the bin.
-    ///   - showRoot: ProPresenter's document root. Each slide is linked into its
-    ///     `Media/Imported` tree and named from there.
     ///   - pixelSize: resolves an image's dimensions. Injectable so the writer
     ///     can be tested without decoding real images.
-    ///   - linkMedia: places one staged image. Injectable so the copy fallback
-    ///     can be tested.
     @discardableResult
     static func package(
         group: ConversionGroup,
         destinationDirectory: URL = BinStorage.presentationsDirectory,
-        showRoot: URL = ProPresenterInstallation.defaultDocumentRoot,
-        pixelSize: (URL) -> PixelSize?,
-        linkMedia: MediaLinker = ProPresenterPackage.link
+        pixelSize: (URL) -> PixelSize?
     ) throws -> URL {
         let images = group.imageURLs
         guard !images.isEmpty else {
             throw ProPackageError.noImages(group.sourceName)
         }
 
-        // Read the dimensions before anything is staged, so a deck that cannot
-        // be measured is reported as such rather than as a ProPresenter
-        // problem, and nothing is linked on its behalf.
         let slides = try images.map { url -> ProSlide in
             guard let size = pixelSize(url) else {
                 throw ProPackageError.unreadableImage(url.lastPathComponent)
@@ -70,213 +59,76 @@ public enum ProPresenterPackage {
             return ProSlide(imageURL: url, pixelSize: size)
         }
 
-        guard ProPresenterInstallation.isUsable(root: showRoot) else {
-            throw ProPackageError.showRootUnavailable(showRoot.path)
-        }
-
-        let staged = try stage(slides: slides, group: group, in: showRoot, linkMedia: linkMedia)
         let name = presentationName(for: group)
-        let manifest = ProPresenterDocument.encode(name: name, slides: staged, showRoot: showRoot)
-
-        let destination = destinationDirectory
-            .appendingPathComponent(name)
-            .appendingPathExtension(fileExtension)
-        do {
-            try manifest.write(to: destination, options: .atomic)
-        } catch {
-            throw ProPackageError.writeFailed("The file could not be saved.")
+        let manifest = ProPresenterDocument.encode(name: name, slides: slides)
+        var entries = [ZipWriter.Entry(name: name + ".pro", source: .data(manifest))]
+        for slide in slides {
+            entries.append(ZipWriter.Entry(
+                name: ProPresenterDocument.mediaPath(for: slide.imageURL.lastPathComponent),
+                source: .file(slide.imageURL)
+            ))
         }
+
+        let destination = bundleURL(for: group, in: destinationDirectory)
+        let partial = destination.appendingPathExtension(partialExtension)
+        do {
+            // Clear deletes this folder, so it is made again here rather than
+            // assumed. Every bundle written after a Clear once failed for want of it.
+            try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+            try ZipWriter.write(entries, to: partial)
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.moveItem(at: partial, to: destination)
+        } catch {
+            try? FileManager.default.removeItem(at: partial)
+            switch error {
+            case ZipWriter.ZipError.tooLarge: throw ProPackageError.tooLarge
+            case ZipWriter.ZipError.unreadable(let file): throw ProPackageError.unreadableImage(file)
+            default: throw ProPackageError.writeFailed("The file could not be saved.")
+            }
+        }
+
+        // A `.pro` from before bundles. It names media ProSlide no longer stages,
+        // so leaving it beside the bundle would only offer a broken file.
+        try? FileManager.default.removeItem(
+            at: destinationDirectory.appendingPathComponent(name).appendingPathExtension("pro")
+        )
         return destination
     }
 
-    /// Convenience overload that reads each image's real pixel dimensions, and
-    /// resolves ProPresenter's own document root.
-    ///
-    /// `showRoot` is exposed so tests can name a definite root; production wants
-    /// the real one.
+    /// Convenience overload that reads each image's real pixel dimensions.
     @discardableResult
     public static func package(
         group: ConversionGroup,
-        destinationDirectory: URL = BinStorage.presentationsDirectory,
-        showRoot: URL = ProPresenterInstallation.defaultDocumentRoot
+        destinationDirectory: URL = BinStorage.presentationsDirectory
     ) throws -> URL {
-        try package(
-            group: group,
-            destinationDirectory: destinationDirectory,
-            showRoot: showRoot,
-            pixelSize: pixelSize(ofImageAt:)
-        )
+        try package(group: group, destinationDirectory: destinationDirectory, pixelSize: pixelSize(ofImageAt:))
     }
 
-    // MARK: - Staging
-
-    /// Links every slide into `showRoot`'s media tree and returns the slides
-    /// renamed to their staged locations, in the same order.
-    ///
-    /// A deck that is already staged and still matches its JPEGs is reused as it
-    /// is. Otherwise the folder is replaced rather than added to: a deck whose
-    /// JPEGs changed since the last build must not leave earlier links behind,
-    /// and ProPresenter would otherwise be offered media the presentation no
-    /// longer names.
-    private static func stage(
-        slides: [ProSlide],
-        group: ConversionGroup,
-        in showRoot: URL,
-        linkMedia: MediaLinker
-    ) throws -> [ProSlide] {
-        let deck = stagedMediaDirectory(for: group, in: showRoot)
-        // Already staged and still current: keep it. Every launch rebuilds every
-        // deck's presentation, and replacing the media each time would move it
-        // to a new folder under presentations ProPresenter may already hold
-        // paths into. Only media that no longer matches the deck is replaced.
-        if let current = currentStaging(of: slides, in: deck) {
-            return current
-        }
-        do {
-            // Only exists on a rebuild, so its absence is not a failure.
-            if FileManager.default.fileExists(atPath: deck.path) {
-                try FileManager.default.removeItem(at: deck)
-            }
-            let item = deck.appendingPathComponent(newMediaItemIdentifier(), isDirectory: true)
-            try FileManager.default.createDirectory(at: item, withIntermediateDirectories: true)
-            return try slides.map { slide in
-                let staged = item.appendingPathComponent(slide.imageURL.lastPathComponent)
-                try place(slide.imageURL, at: staged, linkMedia: linkMedia)
-                return ProSlide(imageURL: staged, pixelSize: slide.pixelSize, label: slide.label)
-            }
-        } catch {
-            // Half a staged deck is worse than none: ProPresenter would read
-            // some slides and not others. Leave the tree as it was found.
-            try? FileManager.default.removeItem(at: deck)
-            throw (error as? ProPackageError) ?? ProPackageError.stageFailed(error.localizedDescription)
-        }
-    }
-
-    /// The slides renamed to their staged locations, if `deck` already holds
-    /// exactly those images and nothing else; nil if anything is missing, extra,
-    /// or no longer the deck's own bytes.
-    private static func currentStaging(of slides: [ProSlide], in deck: URL) -> [ProSlide]? {
-        let manager = FileManager.default
-        guard let items = try? manager.contentsOfDirectory(
-                  at: deck, includingPropertiesForKeys: [.isDirectoryKey]
-              ),
-              items.count == 1,
-              (try? items[0].resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
-              let files = try? manager.contentsOfDirectory(at: items[0], includingPropertiesForKeys: nil),
-              files.count == slides.count
-        else { return nil }
-
-        var staged: [ProSlide] = []
-        for slide in slides {
-            let candidate = items[0].appendingPathComponent(slide.imageURL.lastPathComponent)
-            guard sameContent(slide.imageURL, candidate) else { return nil }
-            staged.append(ProSlide(imageURL: candidate, pixelSize: slide.pixelSize, label: slide.label))
-        }
-        return staged
-    }
-
-    /// Whether `staged` is still the deck's own image: the same inode where it
-    /// was linked, or the same size and modification time where it was copied.
-    /// A JPEG that was re-rendered is a new file, so it fails both.
-    private static func sameContent(_ image: URL, _ staged: URL) -> Bool {
-        let manager = FileManager.default
-        guard let a = try? manager.attributesOfItem(atPath: image.path),
-              let b = try? manager.attributesOfItem(atPath: staged.path)
-        else { return false }
-        if let deviceA = a[.systemNumber] as? NSNumber, let deviceB = b[.systemNumber] as? NSNumber,
-           let inodeA = a[.systemFileNumber] as? NSNumber, let inodeB = b[.systemFileNumber] as? NSNumber,
-           deviceA == deviceB, inodeA == inodeB {
-            return true
-        }
-        return (a[.size] as? NSNumber) == (b[.size] as? NSNumber)
-            && (a[.modificationDate] as? Date) == (b[.modificationDate] as? Date)
-    }
-
-    /// Links `image` to `staged`, falling back to a copy where the two cannot
-    /// share an inode.
-    private static func place(_ image: URL, at staged: URL, linkMedia: MediaLinker) throws {
-        do {
-            try linkMedia(image, staged)
-        } catch {
-            try? FileManager.default.removeItem(at: staged)
-            do {
-                try FileManager.default.copyItem(at: image, to: staged)
-            } catch {
-                throw ProPackageError.stageFailed(image.lastPathComponent)
-            }
-        }
-    }
-
-    /// A hard link: a second directory entry naming the same inode. The bytes
-    /// live in the bin; ProPresenter's media folder only records where else to
-    /// find them.
-    private static func link(from: URL, to: URL) throws {
-        try FileManager.default.linkItem(at: from, to: to)
-    }
-
-    /// `<showRoot>/Media/Imported/<deckID>`: where a deck's staged media lives.
-    ///
-    /// Reachable without state, so both `Rebuild` (which replaces it) and
-    /// `Clear` (which removes it) find the same folder.
-    static func stagedMediaDirectory(
+    /// `group`'s bundle if one has already been written, so a launch can offer it
+    /// without building anything. A `.partial` left by an interrupted build has a
+    /// different name and is never returned.
+    public static func existingBundle(
         for group: ConversionGroup,
-        in showRoot: URL = ProPresenterInstallation.defaultDocumentRoot
-    ) -> URL {
-        showRoot
-            .appendingPathComponent("Media", isDirectory: true)
-            .appendingPathComponent("Imported", isDirectory: true)
-            .appendingPathComponent(mediaDeckIdentifier(for: group), isDirectory: true)
+        in directory: URL = BinStorage.presentationsDirectory
+    ) -> URL? {
+        let url = bundleURL(for: group, in: directory)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// A stable identifier for a deck's folder in ProPresenter's media tree,
-    /// derived from the deck's own path.
-    ///
-    /// Deterministic so a rebuild lands in the same place and clearing the bin
-    /// can find the folder again without having remembered where it wrote. It is
-    /// shaped like a UUID only because that is the shape ProPresenter gives its
-    /// own media folders; it is a hash, not an identity anyone needs to read.
-    static func mediaDeckIdentifier(for group: ConversionGroup) -> String {
-        let path = group.folderURL.standardizedFileURL.path
-        let high = stableHash(path, salt: 0)
-        let low = stableHash(path + "/media", salt: 0x9e3779b97f4a7c15)
-        let digits = hexadecimal(high, digits: 16) + hexadecimal(low, digits: 16)
-        var parts: [Substring] = []
-        var start = digits.startIndex
-        for length in [8, 4, 4, 4, 12] {
-            let end = digits.index(start, offsetBy: length)
-            parts.append(digits[start..<end])
-            start = end
-        }
-        return parts.map(String.init).joined(separator: "-")
-    }
-
-    /// FNV-1a over the string's UTF-8 bytes. Chosen for being two lines and
-    /// having no dependency to match: the value only has to be stable for a
-    /// given path, and different between different paths.
-    private static func stableHash(_ string: String, salt: UInt64) -> UInt64 {
-        var hash: UInt64 = 0xcbf29ce484222325 &+ salt
-        for byte in string.utf8 {
-            hash = (hash ^ UInt64(byte)) &* 0x100000001b3
-        }
-        return hash
-    }
-
-    private static func hexadecimal(_ value: UInt64, digits: Int) -> String {
-        let text = String(value, radix: 16, uppercase: true)
-        return String(repeating: "0", count: max(0, digits - text.count)) + text
-    }
-
-    private static func newMediaItemIdentifier() -> String {
-        UUID().uuidString.uppercased()
+    static func bundleURL(for group: ConversionGroup, in directory: URL) -> URL {
+        directory
+            .appendingPathComponent(presentationName(for: group))
+            .appendingPathExtension(fileExtension)
     }
 
     // MARK: - Naming
 
-    /// The presentation's name, and the filename of the `.pro`.
-    /// A deck's folder is called `Name JPEGs`, so strip that suffix to
-    /// get back to the document's own name.
+    /// The presentation's name, and the filename of the bundle: the converted
+    /// document's own name, whatever copy number its folder in the bin carries.
     static func presentationName(for group: ConversionGroup) -> String {
-        group.displayName
+        group.documentName
     }
 
     // MARK: - Image dimensions

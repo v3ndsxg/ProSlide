@@ -9,10 +9,10 @@ import Foundation
 /// directly instead of taking on `protoc` plus a generated-code dependency.
 ///
 /// The schema is community-reverse-engineered and is not supported by Renewed
-/// Vision; see the "About the `.pro` format" section of README.md. The field
-/// numbers used by `ProPresenterDocument` are checked against the published
-/// `.proto` schema, and the ones a real ProPresenter file exercises are pinned
-/// against a recording of one in `ProPresenterPackageTests`.
+/// Vision; see "The format" in README.md. The field numbers used by
+/// `ProPresenterDocument` are checked against the published `.proto` schema,
+/// and the layout ProPresenter accepted on import is pinned in
+/// `ProPresenterPackageTests`.
 ///
 /// proto3 semantics apply: a scalar field holding its zero value is not written
 /// at all. The `put` methods below follow that rule, so callers can pass values
