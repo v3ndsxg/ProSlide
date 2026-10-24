@@ -305,7 +305,7 @@ public struct ConversionEngine {
 /// been launched, and Stop or the watchdog can fire before, during or after the
 /// launch. This remembers a stop that arrives early and applies it as soon as
 /// the process exists, and never touches one that has already finished.
-private final class ProcessGuardian: @unchecked Sendable {
+final class ProcessGuardian: @unchecked Sendable {
     enum Reason { case cancelled, timedOut }
 
     private let process: Process
