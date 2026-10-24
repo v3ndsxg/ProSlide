@@ -645,10 +645,14 @@ final class ConversionQueueTests: XCTestCase {
             recordedProgress.append(value)
         }
 
-        func run(_ url: URL, report: (Double) -> Void) async throws -> URL {
-            lock.lock()
+        /// Appends to `recordedInputs`, outside `run` for the same reason.
+        private func recordInput(_ url: URL) {
+            lock.lock(); defer { lock.unlock() }
             recordedInputs.append(url.lastPathComponent)
-            lock.unlock()
+        }
+
+        func run(_ url: URL, report: (Double) -> Void) async throws -> URL {
+            recordInput(url)
 
             for value in reports { recordProgress(value); report(value) }
 
@@ -693,12 +697,16 @@ final class ConversionQueueTests: XCTestCase {
             return entered
         }
 
-        func enterAndWait() async {
-            lock.lock()
+        /// Records the entry and says whether the gate was already open. Not
+        /// `async`, so `enterAndWait` can take the lock without the warning.
+        private func markEntered() -> Bool {
+            lock.lock(); defer { lock.unlock() }
             entered = true
-            let alreadyOpen = isOpen
-            lock.unlock()
-            if alreadyOpen { return }
+            return isOpen
+        }
+
+        func enterAndWait() async {
+            if markEntered() { return }
 
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 lock.lock()
