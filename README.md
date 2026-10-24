@@ -30,23 +30,24 @@ The app is ad-hoc signed and not notarized, so Gatekeeper may object on first la
 **Convert** runs only files that haven't finished, so adding a file to a completed batch doesn't redo the others. Drop a file again to convert it again; that creates a second folder rather than overwriting the first. **Stop** ends the batch, including a running LibreOffice, and discards the file in progress.
 
 ## The bin and dragging
-A switch at the top of the bin sets what a card drag hands over:
+The **Converted decks** panel lists each document as a compact row: a grip (the cue that it can be dragged), the name, its slide count, and a status chip (**Ready**, **Preparing…** or **Couldn't prepare**). A switch at the top sets what dragging a row hands over:
 
-- **.pro Presentation** (default): one `Name.pro`, which ProPresenter opens as a single named presentation with every slide attached.
-- **JPEG Folder**: the `Name JPEGs` folder, which ProPresenter imports as a plain sequence. Use this to add slides to an existing presentation, or when you need something portable.
+- **ProPresenter Presentation** (default): one `Name.pro`, which ProPresenter opens as a single named presentation with every slide attached.
+- **JPEG Files**: the `Name JPEGs` folder, which ProPresenter imports as a plain sequence. Use this to add slides to an existing presentation, or when you need something portable.
 
 Other controls:
-- Drag a single thumbnail to move one image.
-- **Save…** copies what the card drags (the `.pro` or the JPEGs) to a folder you choose.
-- **Rebuild** rewrites a deck's `.pro`. **Presentations** reveals the `Pro` folder. **Clear** empties the bin.
+- The chevron on a row previews that deck's slides. Rows start collapsed and open independently. Drag a single thumbnail to move one image.
+- Right-click a row for **Show in Finder**, **Save a copy…** (saves what the row drags) and **Rebuild presentation**. There are no buttons on the rows themselves.
+- **Clear** empties the panel and the file list on the main page.
+- If a deck's presentation couldn't be prepared, open its row to see why and press **Try again**.
 
 A card drag carries one item, never a pile of files: SwiftUI hands over a single `NSItemProvider`, so a list of URLs arrives as one slide. That's why the `.pro`, which references every image, is the way to drag a whole deck.
 
-If a deck's `.pro` can't be written, its card won't drag in presentation mode, and the bin explains why. It does not fall back to the JPEGs.
+If a deck's `.pro` can't be written, its row shows **Couldn't prepare** and won't drag in presentation mode; open it to see why. It does not fall back to the JPEGs.
 
 ### Where files live
 - JPEGs: `~/Documents/ProSlide/Bin/<Name> JPEGs/`, holding JPEGs and nothing else.
-- Presentations: `~/Documents/ProSlide/Pro/`, kept outside the deck folders because ProPresenter imports a folder containing a `.pro` as a presentation, which would break the JPEG Folder option.
+- Presentations: `~/Documents/ProSlide/Pro/`, kept outside the deck folders because ProPresenter imports a folder containing a `.pro` as a presentation, which would break the JPEG Files option.
 - Both are under Documents on purpose. ProPresenter opens these paths itself, and macOS won't let it into another app's `Application Support` container. Decks left in the old location (`~/Library/Application Support/FileConverter/Bin`) are moved across on the first scan.
 
 ## How the `.pro` works
@@ -56,7 +57,7 @@ A `.pro` is a protobuf manifest that **names** images; it can't contain them. So
 2. Writes a `.pro` whose media paths point at those files.
 
 Consequences:
-- The `.pro` is tied to the machine whose ProPresenter library it was written against. Use JPEG Folder to move slides between machines.
+- The `.pro` is tied to the machine whose ProPresenter library it was written against. Use JPEG Files to move slides between machines.
 - ProPresenter's folder is found via `PathSettings.proPaths`, then `~/Documents/ProPresenter`, then `~/Library/Application Support/ProPresenter`. It must already exist, because ProSlide never creates it. A library moved elsewhere in ProPresenter's preferences may not be found.
 - Rebuilding keeps a deck's staged media where it is unless the deck's images changed. **Clear** deletes it, so re-import a deck afterwards if ProPresenter reads its images in place.
 - Slides carry no playback duration, so each holds until you click.

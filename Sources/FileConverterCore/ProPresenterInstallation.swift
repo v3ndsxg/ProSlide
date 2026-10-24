@@ -58,7 +58,7 @@ public enum ProPresenterInstallation {
     ///
     /// Unused for now: a deck's presentation is attempted either way, and a
     /// missing library is reported when the staging has somewhere to write to —
-    /// which is the only point it can be judged. The JPEG Folder drag works
+    /// which is the only point it can be judged. The JPEG Files drag works
     /// regardless.
     public static var isInstalled: Bool {
         FileManager.default.fileExists(atPath: fallbackDocumentRoot.path)

@@ -22,7 +22,7 @@ import ImageIO
 ///
 /// The trade-off is that a `.pro` is tied to the machine whose ProPresenter
 /// library holds it. Moving it elsewhere, or clearing the bin, leaves it naming
-/// media that is no longer staged; the JPEG Folder drag is the portable option.
+/// media that is no longer staged; the JPEG Files drag is the portable option.
 public enum ProPresenterPackage {
 
     /// The extension ProPresenter gives these.
@@ -276,11 +276,7 @@ public enum ProPresenterPackage {
     /// A deck's folder is called `Name JPEGs`, so strip that suffix to
     /// get back to the document's own name.
     static func presentationName(for group: ConversionGroup) -> String {
-        let folder = group.sourceName
-        let suffix = " JPEGs"
-        guard folder.hasSuffix(suffix) else { return folder }
-        let trimmed = String(folder.dropLast(suffix.count))
-        return trimmed.isEmpty ? folder : trimmed
+        group.displayName
     }
 
     // MARK: - Image dimensions

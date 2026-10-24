@@ -30,8 +30,27 @@ public enum DragMode: String, CaseIterable, Identifiable, Sendable {
 
     public var title: String {
         switch self {
-        case .jpegFolder: "JPEG Folder"
-        case .presentation: ".pro Presentation"
+        case .jpegFolder: "JPEG Files"
+        case .presentation: "ProPresenter Presentation"
+        }
+    }
+}
+
+/// What a deck's card in the bin can do right now, shown as its status chip.
+public enum DeckStatus: Equatable, Sendable {
+    /// Its `.pro` is still being written, so a presentation drag has nothing to
+    /// hand over yet.
+    case preparing
+    /// It can be dragged.
+    case ready
+    /// Its `.pro` could not be written; the reason is what the operator needs.
+    case failed(String)
+
+    public var title: String {
+        switch self {
+        case .preparing: "Preparing\u{2026}"
+        case .ready: "Ready"
+        case .failed: "Couldn\u{2019}t prepare"
         }
     }
 }
@@ -185,6 +204,15 @@ public struct ConversionGroup: Identifiable, Equatable, Sendable {
     public let folderURL: URL
     public let imageURLs: [URL]
 
+    /// The document's own name: the folder's name without its " JPEGs" suffix.
+    /// What the bin shows, and what the presentation is called.
+    public var displayName: String {
+        let suffix = " JPEGs"
+        guard sourceName.hasSuffix(suffix) else { return sourceName }
+        let trimmed = String(sourceName.dropLast(suffix.count))
+        return trimmed.isEmpty ? sourceName : trimmed
+    }
+
     public init(sourceName: String, folderURL: URL) {
         self.sourceName = sourceName
         self.folderURL = folderURL
@@ -244,7 +272,7 @@ public enum ProPackageError: LocalizedError, Equatable {
         case .showRootUnavailable(let path):
             "ProPresenter's folder was not found at \(path). Open ProPresenter once, "
                 + "or move your library back, then Rebuild. Until then this card cannot drag a "
-                + "presentation; switch to JPEG Folder to use its images."
+                + "presentation; switch to JPEG Files to use its images."
         case .stageFailed(let name):
             "\(name) could not be linked or copied into ProPresenter's media folder."
         case .writeFailed(let detail): "The presentation could not be written. \(detail)"

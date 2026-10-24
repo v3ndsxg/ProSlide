@@ -309,6 +309,24 @@ public final class ConversionQueue: ObservableObject {
         }
     }
 
+    /// The state of `group`'s card in the current drag mode.
+    ///
+    /// In JPEG Files mode the images are all that is dragged and they already
+    /// exist, so the card is ready whatever became of its presentation. In
+    /// presentation mode a deck is ready only once its `.pro` is written; a stale
+    /// failure is ignored when a presentation exists, so a rebuild that worked
+    /// clears the chip.
+    public func deckStatus(for group: ConversionGroup) -> DeckStatus {
+        switch dragMode {
+        case .jpegFolder:
+            return .ready
+        case .presentation:
+            if presentation(for: group) != nil { return .ready }
+            if let reason = presentationFailures[group.id] { return .failed(reason) }
+            return .preparing
+        }
+    }
+
     /// The presentation to drag for `group`, or nil when there isn't one yet.
     public func presentation(for group: ConversionGroup) -> URL? {
         presentations[group.id]
@@ -394,7 +412,7 @@ public final class ConversionQueue: ObservableObject {
 
     /// Copies a deck's JPEGs into a folder the operator chose.
     ///
-    /// Only correct in JPEG Folder mode. In presentation mode the thing this
+    /// Only correct in JPEG Files mode. In presentation mode the thing this
     /// saves is not what the card drags, and offering it there is a trap: it sits
     /// directly beside a caption describing a different payload, hands over
     /// something else, and gives no indication which. That is not a subtle

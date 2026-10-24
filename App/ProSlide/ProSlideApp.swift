@@ -25,7 +25,7 @@ struct ProSlideApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(queue)
-                .frame(minWidth: 1180, minHeight: 640)
+                .frame(minWidth: 1000, minHeight: 640)
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1280, height: 720)

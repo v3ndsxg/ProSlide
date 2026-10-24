@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var saveTarget: ConversionGroup?
     @State private var confirmingClear = false
     @State private var isTargeted = false
+    @State private var expandedDecks: Set<String> = []
 
     var body: some View {
         HStack(spacing: 0) {
@@ -207,11 +208,10 @@ struct ContentView: View {
     private var binPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Bin", systemImage: "photo.stack").font(.headline)
+                Label("Converted decks", systemImage: "photo.stack").font(.headline)
                 Spacer()
-                Button("Open Folder") { BinOpener.open(queue.binRootURL) }
-                Button("Presentations") { BinOpener.open(queue.binPresentationsURL) }
                 Button("Clear", role: .destructive) { confirmingClear = true }
+                    .buttonStyle(.borderless)
                     .disabled(queue.isConverting)
             }
             Picker("Card drag", selection: $queue.dragMode) {
@@ -223,124 +223,153 @@ struct ContentView: View {
             .labelsHidden()
             Text(binHint).font(.caption).foregroundStyle(.secondary)
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(queue.groups) { group in
-                        binGroup(group)
+                        deckRow(group)
                     }
                 }
                 .padding(.vertical, 2)
             }
         }
         .padding(14)
-        .frame(width: 460)
+        .frame(width: 340)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color.secondary.opacity(0.06))
     }
 
+    /// One line, naming what a drag does in the current mode.
     private var binHint: String {
         switch queue.dragMode {
-        case .jpegFolder:
-            var hint = "Each card drags its JPEG folder, so ProPresenter brings in every slide at once."
-            if !queue.presentationFailureMessages.isEmpty {
-                hint += " "
-                hint += queue.presentationFailureSummary
-            }
-            return hint
         case .presentation:
-            var hint = "Each card drags the deck's .pro, which opens as one named presentation with every slide attached. Presentations are kept in their own folder — use Presentations to find them. ProSlide links each deck's images into ProPresenter's own media folder, so no space is spent twice."
-            if queue.groups.contains(where: { queue.presentation(for: $0) == nil && queue.presentationFailures[$0.id] == nil }) {
-                hint += " They are written in the background, so a card still being written does not drag yet."
-            }
-            // Failures are stated here, in full. A card caption nobody reads
-            // about a presentation that silently never existed is how six
-            // commits of writer work went untested.
-            if !queue.presentationFailureMessages.isEmpty {
-                hint += " "
-                hint += queue.presentationFailureSummary
-            }
-            return hint
+            return "Drag a deck into ProPresenter to open it as one presentation."
+        case .jpegFolder:
+            return "Drag a deck to add its slides to a presentation you already have."
         }
     }
 
-    private func binGroup(_ group: ConversionGroup) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(group.sourceName).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Spacer()
-                Text("\(group.imageURLs.count) images").font(.caption).foregroundStyle(.secondary)
-                if queue.presentation(for: group) != nil || queue.presentationFailures[group.id] != nil {
-                    Button("Rebuild") {
-                        queue.buildPresentation(group)
-                    }
+    /// A deck is one compact row: grip, name, slide count, status and a chevron
+    /// that opens its slides. There are no buttons on the face of the card; the
+    /// housekeeping actions live in its right-click menu.
+    private func deckRow(_ group: ConversionGroup) -> some View {
+        let status = queue.deckStatus(for: group)
+        let isOpen = expandedDecks.contains(group.id)
+        let payload = queue.dragPayload(for: group)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                DragGrip()
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(group.displayName)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1).truncationMode(.middle)
+                    Text("\(group.imageURLs.count) \(group.imageURLs.count == 1 ? "slide" : "slides")")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Button("Open") { BinOpener.open(group.folderURL) }
-                Button(saveLabel(for: group)) { saveTarget = group; showingSaveImporter = true }
-            }
-            HStack(spacing: 5) {
-                Image(systemName: cardDragIcon(for: group))
-                Text(cardDragCaption(for: group))
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
-                ForEach(group.imageURLs, id: \.self) { imageURL in
-                    VStack(spacing: 4) {
-                        if let image = NSImage(contentsOf: imageURL) {
-                            Image(nsImage: image)
-                                .resizable().scaledToFit()
-                                .frame(width: 96, height: 54)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        } else {
-                            Image(systemName: "photo").frame(width: 96, height: 54)
-                        }
-                        Text(imageURL.lastPathComponent).font(.caption2).lineLimit(1)
-                    }
-                    .onDrag { NSItemProvider(object: imageURL as NSURL) }
+                Spacer(minLength: 4)
+                statusChip(status)
+                Button {
+                    if isOpen { expandedDecks.remove(group.id) } else { expandedDecks.insert(group.id) }
+                } label: {
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .help(isOpen ? "Hide slides" : "Preview slides")
+                .accessibilityLabel(isOpen ? "Hide slides" : "Preview slides")
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            if isOpen { deckDetail(group, status: status) }
         }
-        .padding(10)
-        .background(Color.purple.opacity(0.1))
+        .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
         // The whole card is the drag source. .contentShape is what makes the
         // padding and empty space around the content draggable too, rather
-        // than only the text and thumbnails.
+        // than only the text.
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .draggable(on: queue.dragPayload(for: group))
-    }
-
-    /// Names what the button will actually save.
-    ///
-    /// "Save…" sat next to a caption describing a presentation and handed over
-    /// loose JPEGs. A label that cannot be wrong about its own contents is the
-    /// cheapest fix for that.
-    private func saveLabel(for group: ConversionGroup) -> String {
-        switch queue.dragMode {
-        case .jpegFolder:
-            return "Save JPEGs…"
-        case .presentation:
-            return queue.presentation(for: group) == nil ? "No .pro yet" : "Save .pro…"
+        .draggable(on: payload)
+        .openHandCursor(when: payload != nil)
+        .contextMenu {
+            Button("Show in Finder") { reveal(group) }
+            Button("Save a copy\u{2026}") { saveTarget = group; showingSaveImporter = true }
+                .disabled(queue.dragMode == .presentation && queue.presentation(for: group) == nil)
+            Button("Rebuild presentation") { queue.buildPresentation(group) }
         }
     }
 
-    private func cardDragIcon(for group: ConversionGroup) -> String {
-        switch queue.dragMode {
-        case .jpegFolder: return "folder.fill"
-        case .presentation: return queue.presentation(for: group) == nil ? "clock" : "doc.text.fill"
+    private func statusChip(_ status: DeckStatus) -> some View {
+        let color: Color
+        switch status {
+        case .ready: color = .green
+        case .preparing: color = .gray
+        case .failed: color = .red
         }
+        return Text(status.title)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.15), in: Capsule())
+            .fixedSize()
     }
 
-    private func cardDragCaption(for group: ConversionGroup) -> String {
-        switch queue.dragMode {
-        case .jpegFolder:
-            return "Drag this card into ProPresenter"
-        case .presentation:
-            if queue.presentation(for: group) == nil, let failure = queue.presentationFailures[group.id] {
-                return "Could not write the presentation: \(failure)"
+    /// What a deck shows when opened: its slides, or -- when its presentation
+    /// could not be written -- why, with the one button that can fix it.
+    @ViewBuilder
+    private func deckDetail(_ group: ConversionGroup, status: DeckStatus) -> some View {
+        if case .failed(let reason) = status {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(reason)
+                    .font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Try again") { queue.buildPresentation(group) }
             }
-            return queue.presentation(for: group) == nil
-                ? "Building presentation\u{2026}"
-                : "Drag this card to open it as a presentation"
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+        } else {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 6)], spacing: 6) {
+                ForEach(Array(group.imageURLs.enumerated()), id: \.element) { index, imageURL in
+                    thumbnail(imageURL, number: index + 1)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func thumbnail(_ imageURL: URL, number: Int) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            if let image = NSImage(contentsOf: imageURL) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.secondary.opacity(0.15)
+            }
+            Text("\(number)")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Color.black.opacity(0.55), in: Capsule())
+                .padding(3)
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+        // A single slide can still be dragged out on its own.
+        .onDrag { NSItemProvider(object: imageURL as NSURL) }
+    }
+
+    /// Reveals what the card drags: the `.pro` in presentation mode once it
+    /// exists, otherwise the deck's folder.
+    private func reveal(_ group: ConversionGroup) {
+        if queue.dragMode == .presentation, let presentation = queue.presentation(for: group) {
+            BinOpener.reveal(presentation)
+        } else {
+            BinOpener.open(group.folderURL)
         }
     }
 
@@ -406,5 +435,59 @@ private extension View {
         } else {
             self
         }
+    }
+}
+
+// MARK: - Drag affordances
+
+/// Six dots on a card's left edge: the visual cue that the card can be picked up.
+/// Purely a hint -- the whole card is the drag source, not just this.
+private struct DragGrip: View {
+    var body: some View {
+        VStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { _ in
+                HStack(spacing: 3) {
+                    Circle().frame(width: 3, height: 3)
+                    Circle().frame(width: 3, height: 3)
+                }
+            }
+        }
+        .foregroundStyle(.secondary.opacity(0.7))
+        .accessibilityHidden(true)
+    }
+}
+
+/// Shows the open-hand cursor while the pointer is over something draggable.
+///
+/// `NSCursor.push` and `pop` must stay balanced or the cursor sticks, so whether
+/// this view has pushed one is remembered and released when the pointer leaves,
+/// the card stops being draggable, or the view goes away.
+private struct OpenHandCursor: ViewModifier {
+    let active: Bool
+    @State private var pushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                if inside && active && !pushed {
+                    NSCursor.openHand.push()
+                    pushed = true
+                } else if (!inside || !active) && pushed {
+                    NSCursor.pop()
+                    pushed = false
+                }
+            }
+            .onDisappear {
+                if pushed {
+                    NSCursor.pop()
+                    pushed = false
+                }
+            }
+    }
+}
+
+private extension View {
+    func openHandCursor(when active: Bool) -> some View {
+        modifier(OpenHandCursor(active: active))
     }
 }

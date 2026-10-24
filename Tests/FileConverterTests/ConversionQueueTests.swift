@@ -150,6 +150,38 @@ final class ConversionQueueTests: XCTestCase {
         )
     }
 
+    // MARK: - Deck status
+
+    func testDragModesAreLabelledInTitleCase() {
+        XCTAssertEqual(DragMode.presentation.title, "ProPresenter Presentation")
+        XCTAssertEqual(DragMode.jpegFolder.title, "JPEG Files")
+    }
+
+    func testDeckStatusFollowsThePresentationInPresentationMode() throws {
+        let queue = makeQueue(Recorder())
+        let group = ConversionGroup(sourceName: "Deck JPEGs", folderURL: URL(fileURLWithPath: "/tmp/none"))
+        queue.dragMode = .presentation
+
+        XCTAssertEqual(queue.deckStatus(for: group), .preparing, "nothing written and nothing failed yet")
+        XCTAssertEqual(queue.deckStatus(for: group).title, "Preparing\u{2026}")
+
+        queue.recordPresentationFailure("The folder is missing.", for: group)
+        XCTAssertEqual(queue.deckStatus(for: group), .failed("The folder is missing."))
+        XCTAssertEqual(queue.deckStatus(for: group).title, "Couldn\u{2019}t prepare")
+    }
+
+    /// In JPEG Files mode the images are the whole payload, so a deck whose
+    /// presentation failed is still ready to drag.
+    func testDeckStatusIsReadyInJPEGFilesModeEvenAfterAPresentationFailure() {
+        let queue = makeQueue(Recorder())
+        let group = ConversionGroup(sourceName: "Deck JPEGs", folderURL: URL(fileURLWithPath: "/tmp/none"))
+        queue.recordPresentationFailure("boom", for: group)
+
+        queue.dragMode = .jpegFolder
+        XCTAssertEqual(queue.deckStatus(for: group), .ready)
+        XCTAssertEqual(queue.deckStatus(for: group).title, "Ready")
+    }
+
     // MARK: - Progress
     func testAggregateProgressMath() {
         // Each call names the method outright rather than binding it to a local
