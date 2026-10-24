@@ -105,5 +105,12 @@ python3 -I Scripts/check-probundle.py Deck.probundle   # or a folder of them
 - Output is capped at 8192 px per side and 300 pages per document, and filenames are sanitised.
 - The app is unsandboxed because it launches LibreOffice. It makes no network connections.
 
-## Possible future work
-A Rust core for batch queuing and image processing, and PowerPoint automation as an optional renderer for closer Office fidelity. PDFKit and LibreOffice stay as the renderers.
+## Beta features
+These are planned for the `beta` branch and are not in `main` yet. New work is tested there first and reaches `main` only once it has proven out.
+
+- **YouTube download:** save a video as MP4 or just its audio as MP3.
+- **Social media download:** the same MP4 and MP3 options for links from social media sites.
+- **Lyrics Formatter:** format lyrics with ease so they import into ProPresenter quickly.
+- **Same bin:** downloads and formatted lyrics land in the bin like any other deck, so they stay easy to drag or copy into ProPresenter.
+
+Longer term: a Rust core for batch queuing and image processing, and PowerPoint automation as an optional renderer for closer Office fidelity. PDFKit and LibreOffice stay as the renderers.
