@@ -16,6 +16,10 @@ jobs:
       # Actions are pinned to commit SHAs (not moving tags) for supply-chain hygiene.
       # actions/checkout v7
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Nothing in this job pushes, so the token isn't left in .git/config
+          # for the later steps.
+          persist-credentials: false
 
       - name: Pin Xcode 16.4 (deterministic SDK)
         run: |
@@ -60,10 +64,15 @@ jobs:
         # still reports success — which is how a broken ConversionQueueTests
         # typealias went unnoticed for many commits. Never pipe swift test into
         # tee again without this.
+        #
+        # The output is written beside the JPEGs and bundles, so the uploaded
+        # artifact opens straight onto them rather than onto runner paths.
         shell: bash
         env:
           FILE_CONVERTER_ARTIFACTS: ${{ runner.temp }}/test-artifacts
-        run: swift test 2>&1 | tee test-output.txt
+        run: |
+          mkdir -p "$FILE_CONVERTER_ARTIFACTS"
+          swift test 2>&1 | tee "$FILE_CONVERTER_ARTIFACTS/test-output.txt"
 
       - name: Check the bundles the tests built
         # The bundle tests copy each real bundle they build (from sample.pdf,
@@ -73,13 +82,19 @@ jobs:
         # even when a test failed, since a bad bundle is often why.
         #
         # The PDF bundle is required: without LibreOffice the others are
-        # skipped, but a missing PDF bundle means the export itself broke.
+        # skipped, but a missing PDF bundle means the export itself broke. A
+        # missing PowerPoint bundle only warns, so a failed LibreOffice install
+        # still shows on the run page instead of passing in silence.
         if: ${{ !cancelled() }}
         shell: bash
         env:
           BUNDLES: ${{ runner.temp }}/test-artifacts/bundles
         run: |
           test -f "$BUNDLES/pdf/sample.probundle" || { echo "the PDF bundle was not exported"; exit 1; }
+          for kind in pptx ppt; do
+            test -f "$BUNDLES/$kind/sample.probundle" ||
+              echo "::warning title=PowerPoint path not checked::No $kind bundle was built, probably because LibreOffice did not install. Only the PDF path was tested."
+          done
           python3 -I Scripts/check-probundle.py "$BUNDLES"
 
       - name: Upload test artifacts
@@ -89,7 +104,7 @@ jobs:
         with:
           name: test-artifacts
           path: |
-            test-output.txt
+            ${{ runner.temp }}/test-artifacts/test-output.txt
             ${{ runner.temp }}/test-artifacts/**/*.jpg
             ${{ runner.temp }}/test-artifacts/bundles/**/*.probundle
           if-no-files-found: warn
