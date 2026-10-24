@@ -39,17 +39,15 @@ Other controls:
 - The chevron on a row previews that deck's slides. Rows start collapsed and open independently. Drag a single thumbnail to move one image.
 - Right-click a row for **Show in Finder**, **Save a copy…** (saves what the row drags) and **Rebuild presentation**. There are no buttons on the rows themselves.
 - **Clear** empties the panel and the file list on the main page.
-- If a deck's presentation couldn't be prepared, open its row to see why and press **Try again**.
+- **Couldn't prepare** means the bundle couldn't be written. The row won't drag as a presentation, and never falls back to the JPEGs. Open it to see why and press **Try again**.
 - A deck converted before bundles existed shows **Not built**. Open its row and press **Build presentation**.
 
-A card drag carries one item, never a pile of files: SwiftUI hands over a single `NSItemProvider`, so a list of URLs arrives as one slide. That's why the bundle, which holds every image, is the way to drag a whole deck.
-
-If a deck's bundle can't be written, its row shows **Couldn't prepare** and won't drag in presentation mode; open it to see why. It does not fall back to the JPEGs.
+A drag hands over a single item, which is why a whole deck travels as one bundle or one folder rather than a pile of files.
 
 ### Where files live
 - JPEGs: `~/Documents/ProSlide/Bin/<Name> JPEGs/`, holding JPEGs and nothing else.
-- Presentations: `~/Documents/ProSlide/Pro/<Name>.probundle`, kept outside the deck folders because ProPresenter imports a folder containing a presentation as that presentation, which would break the JPEG Files option. A bundle holds its own copy of the deck's JPEGs, so each deck takes about twice its JPEGs' size until you **Clear**.
-- Both are under Documents on purpose. ProPresenter opens these paths itself, and macOS won't let it into another app's `Application Support` container. Decks left in the old location (`~/Library/Application Support/FileConverter/Bin`) are moved across on the first scan.
+- Presentations: `~/Documents/ProSlide/Pro/<Name>.probundle`. They're kept apart from the JPEG folders because ProPresenter imports a folder holding a presentation as that presentation. Each bundle has its own copy of the JPEGs, so a deck takes about twice the space until you **Clear**.
+- Both are under Documents because ProPresenter opens these paths itself, and macOS won't let it into another app's container. Decks in the old location (`~/Library/Application Support/FileConverter/Bin`) are moved across on the first scan.
 
 ## How the bundle works
 A `.probundle` is an uncompressed zip holding `<Name>.pro` and the deck's images under `Media/Assets/`. The `.pro` names each image relative to the bundle, so:
@@ -58,23 +56,14 @@ A `.probundle` is an uncompressed zip holding `<Name>.pro` and the deck's images
 - On import, ProPresenter copies the images into its own media store, with media management on or off. Importing the same deck twice gives a second copy named `-1`.
 - ProSlide never reads, writes or deletes anything in ProPresenter's own folders.
 
-Bundles are written as part of **Convert**, so a deck is ready to drag when it reaches the bin. Opening the app only finds bundles already written; it never builds one. A bundle is written as `<Name>.probundle.partial` and renamed when complete, so one cut short by a crash is never offered.
+Bundles are built during **Convert**, so a deck is ready to drag when it reaches the bin. Each is written under a temporary name and renamed when complete, so an interrupted one is never offered.
 
 ### The format
-ProPresenter 7+ stores presentations as protobuf. The schema is community-reverse-engineered and not supported by Renewed Vision. ProSlide writes it with a small wire-format writer (`ProtobufWriter.swift`) and no `protoc` step, and writes the zip itself (`ZipWriter.swift`).
+ProPresenter 7+ stores presentations as protobuf, in a schema the community reverse-engineered and Renewed Vision doesn't support. ProSlide writes the protobuf and the zip itself (`ProtobufWriter.swift`, `ZipWriter.swift`), with no `protoc` step.
 
-The layout was copied from a bundle ProPresenter re-exported itself, then confirmed by importing generated bundles into a workspace-era ProPresenter build. Each slide is one cue with two actions:
+The layout was copied from a bundle ProPresenter exported, then confirmed by importing generated bundles. Each slide is one cue holding an empty slide with the canvas size, then a foreground media action with the image. A media action is used because ProPresenter can turn a media cue into a slide element but not the reverse. Image paths are relative to the bundle and never absolute.
 
-- **An empty presentation slide** carrying only the canvas size, labelled with the image's name.
-- **A foreground media action** (layer type 1) carrying the image, scaled to fill. A media action rather than a slide element, because ProPresenter can turn a media cue into a slide element but not the reverse.
-
-What each image reference holds, and what it deliberately leaves out:
-
-- **Root `ROOT_SHOW` (10)** and the path `Media/Assets/<file>`. No absolute `file://` URL and no platform: those would name a file on the machine that built the bundle.
-- **No duration**, so ProPresenter applies its own.
-- **No asset identifier** (media fields 10 and 11). ProPresenter assigns its own on import.
-- **No application info, notes, timeline or `content_destination`.** Copying `content_destination` from an announcements deck sent a test bundle to the announcements layer.
-- **Names flagged UTF-8** in the zip, so Cyrillic deck names arrive intact. ProPresenter's own exports leave the flag off.
+`ProPresenterDocument.swift` lists what is deliberately left out of the `.pro`, and why. Don't change it without testing a new import.
 
 ## Conversion
 - **PDF:** PDFKit and Core Graphics render each page to JPEG, using the page's crop box and honouring its rotation.
@@ -99,11 +88,13 @@ Both build systems use Swift 5 language mode, and the code hasn't been audited f
 ```
 swift test
 ```
-- `EngineSmokeTests`: PDF and PPTX at every resolution preset (HD, Full HD, 4K), checking output size and orientation. The PPTX test is skipped without LibreOffice.
+- `EngineSmokeTests`: PDF and PPTX at every resolution preset (HD, Full HD, 4K) and PPT at Full HD, checking output size and orientation. The PowerPoint tests are skipped without LibreOffice.
 - `ConversionQueueTests`: the batch queue through an injected converter and packager, against a temporary bin, with no window or LibreOffice.
-- `ProPresenterPackageTests`: the zip and `.pro` writers, read back with an independent zip reader, an independent protobuf reader and the system's `unzip`, plus end-to-end bundles built from each fixture (the PowerPoint ones skipped without LibreOffice). These tests can't prove ProPresenter accepts a file; only an import can.
+- `ProPresenterPackageTests`: the zip and `.pro` writers, read back with independent readers and the system's `unzip`, plus a real bundle built from each fixture. These tests can't prove ProPresenter accepts a file; only an import can.
 
-CI runs all of this on a macOS runner and packages the app with the install script. It then runs `Scripts/check-probundle.py` on the bundles the end-to-end tests built, and uploads them with the run's `test-artifacts`, ready to drag into ProPresenter. The checker is standard-library Python that shares no code with the Swift writer. It checks the zip, the layout, every JPEG, and the `.pro`'s cues, UUIDs, media paths and sizes. It runs anywhere, including Linux:
+CI runs on a macOS runner. It packages the app with the install script, runs the tests, then checks the bundles they built with `Scripts/check-probundle.py`. If LibreOffice didn't install, the run shows a warning that the PowerPoint path wasn't checked. Each run uploads a **test-artifacts** zip holding the test output, the rendered JPEGs and the bundles, ready to drag into ProPresenter.
+
+The checker is standard-library Python that shares no code with the Swift writer, so it runs anywhere, Linux included:
 
 ```
 python3 -I Scripts/check-probundle.py Deck.probundle   # or a folder of them
