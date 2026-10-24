@@ -3,35 +3,50 @@ import FileConverterCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// The sections of the main page. The bin on the right is shared by all of them.
+enum AppTab: String, CaseIterable, Identifiable {
+    case converter
+    case downloader
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .converter: "Converter"
+        case .downloader: "Downloader"
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var queue: ConversionQueue
+    @AppStorage("selectedTab") private var tab: AppTab = .converter
     @State private var showingImporter = false
     @State private var showingSaveImporter = false
     @State private var saveTarget: ConversionGroup?
+    @State private var saveDownloadTarget: MediaItem?
     @State private var confirmingClear = false
     @State private var isTargeted = false
     @State private var expandedDecks: Set<String> = []
 
     var body: some View {
         HStack(spacing: 0) {
+            leftPane
+            Divider()
             // Each importer sits on its own view. SwiftUI keeps only the last
             // `fileImporter` attached to a given view, so two on one view left the
             // first one -- "click to choose files" -- unable to open at all.
-            mainPane
-                .fileImporter(
-                    isPresented: $showingImporter,
-                    allowedContentTypes: [.pdf] + ["pptx", "ppt"].compactMap { UTType(filenameExtension: $0) },
-                    allowsMultipleSelection: true
-                ) { result in
-                    if case .success(let urls) = result { queue.accept(urls) }
-                }
-            if !queue.groups.isEmpty {
-                Divider()
-                binPanel
-                    .fileImporter(isPresented: $showingSaveImporter, allowedContentTypes: [.folder]) { result in
-                        guard case .success(let url) = result, let group = saveTarget else { return }
-                        saveTarget = nil
-                        do {
+            binPanel
+                .fileImporter(isPresented: $showingSaveImporter, allowedContentTypes: [.folder]) { result in
+                    guard case .success(let url) = result else { return }
+                    let group = saveTarget
+                    let download = saveDownloadTarget
+                    saveTarget = nil
+                    saveDownloadTarget = nil
+                    do {
+                        if let download {
+                            try queue.save(download: download, to: url)
+                        } else if let group {
                             // What is saved is what the card drags. It used to always
                             // be the JPEG folder, in presentation mode too -- beside a
                             // caption describing a different payload, which is how a
@@ -41,11 +56,11 @@ struct ContentView: View {
                             } else {
                                 try queue.save(group: group, to: url)
                             }
-                        } catch {
-                            queue.message = error.localizedDescription
                         }
+                    } catch {
+                        queue.message = error.localizedDescription
                     }
-            }
+                }
         }
         .task { queue.reloadBin() }
         .confirmationDialog("Clear the bin and the file list?", isPresented: $confirmingClear, titleVisibility: .visible) {
@@ -58,25 +73,56 @@ struct ContentView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Removes every converted deck, its presentation, and the files queued on the main page, so you can start fresh.")
+            Text(clearMessage)
         }
+    }
+
+    /// Says what Clear will delete, with counts, since it also deletes downloads
+    /// and that cannot be undone.
+    private var clearMessage: String {
+        var parts: [String] = []
+        let decks = queue.groups.count
+        let downloads = queue.downloads.count
+        if decks > 0 { parts.append("\(decks) deck\(decks == 1 ? "" : "s") and their presentations") }
+        if downloads > 0 { parts.append("\(downloads) download\(downloads == 1 ? "" : "s")") }
+        let what = parts.isEmpty ? "Nothing in the bin" : parts.joined(separator: " and ")
+        return "Deletes \(what), and empties the Converter file list. This can\u{2019}t be undone."
+    }
+
+    // MARK: - Tabs
+
+    private var leftPane: some View {
+        VStack(spacing: 0) {
+            Picker("Section", selection: $tab) {
+                ForEach(AppTab.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 260)
+            .padding(.top, 16)
+
+            switch tab {
+            case .converter:
+                mainPane
+                    .fileImporter(
+                        isPresented: $showingImporter,
+                        allowedContentTypes: [.pdf] + ["pptx", "ppt"].compactMap { UTType(filenameExtension: $0) },
+                        allowsMultipleSelection: true
+                    ) { result in
+                        if case .success(let urls) = result { queue.accept(urls) }
+                    }
+            case .downloader:
+                DownloaderView()
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: - Main pane
 
     private var mainPane: some View {
         VStack(spacing: 18) {
-            HStack(spacing: 10) {
-                Text(AppIdentity.current.displayName).font(.largeTitle.weight(.semibold))
-                if AppIdentity.current.isBeta {
-                    Text("BETA")
-                        .font(.caption.weight(.heavy))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.orange))
-                        .foregroundStyle(.black)
-                }
-            }
+            AppTitleView()
             Text("Turn PDFs and PowerPoint slides into dependable JPEG images.")
                 .foregroundStyle(.secondary)
 
@@ -218,22 +264,36 @@ struct ContentView: View {
     private var binPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label("Converted decks", systemImage: "photo.stack").font(.headline)
+                Label("Bin", systemImage: "tray.full").font(.headline)
+                Text("\u{00B7} \(binCount) item\(binCount == 1 ? "" : "s")")
+                    .font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
                 Button("Clear", role: .destructive) { confirmingClear = true }
                     .buttonStyle(.borderless)
                     .disabled(queue.isConverting)
             }
-            Picker("Card drag", selection: $queue.dragMode) {
-                ForEach(DragMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+            // The mode only changes what a deck hands over; a download is always
+            // the file itself.
+            if !queue.groups.isEmpty {
+                Picker("Card drag", selection: $queue.dragMode) {
+                    ForEach(DragMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text(binHint).font(.caption).foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            Text(binHint).font(.caption).foregroundStyle(.secondary)
+            if binCount == 0 {
+                Text("Converted decks and downloads appear here. Drag a card into ProPresenter.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.top, 4)
+            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(queue.downloads) { item in
+                        mediaRow(item)
+                    }
                     ForEach(queue.groups) { group in
                         deckRow(group)
                     }
@@ -246,6 +306,8 @@ struct ContentView: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color.secondary.opacity(0.06))
     }
+
+    private var binCount: Int { queue.groups.count + queue.downloads.count }
 
     /// One line, naming what a drag does in the current mode.
     private var binHint: String {
@@ -307,6 +369,65 @@ struct ContentView: View {
                 .disabled(queue.dragMode == .presentation && queue.presentation(for: group) == nil)
             Button("Rebuild presentation") { queue.buildPresentation(group) }
         }
+    }
+
+    /// A downloaded video or audio file: the same card shape as a deck, but the
+    /// drag hands over the file itself and there is nothing to preview or build.
+    private func mediaRow(_ item: MediaItem) -> some View {
+        let payload = queue.dragPayload(for: item)
+        return HStack(spacing: 8) {
+            DragGrip()
+            mediaThumbnail(item)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1).truncationMode(.middle)
+                Text(item.detail)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            if payload == nil {
+                Text("File missing").font(.caption2).foregroundStyle(.red)
+            } else {
+                statusChip(.ready)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .draggable(on: payload)
+        .openHandCursor(when: payload != nil)
+        .contextMenu {
+            Button("Show in Finder") { BinOpener.reveal(item.fileURL) }
+            Button("Save a copy\u{2026}") { saveDownloadTarget = item; showingSaveImporter = true }
+            Divider()
+            Button("Remove", role: .destructive) {
+                do {
+                    try queue.remove(download: item)
+                } catch {
+                    queue.message = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func mediaThumbnail(_ item: MediaItem) -> some View {
+        ZStack {
+            if let url = item.thumbnailURL, let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.secondary.opacity(0.15)
+                Image(systemName: item.kind == .video ? "film" : "music.note")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 56, height: 32)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
     private func statusChip(_ status: DeckStatus) -> some View {

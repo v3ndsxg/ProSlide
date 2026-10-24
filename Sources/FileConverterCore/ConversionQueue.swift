@@ -27,6 +27,7 @@ public final class ConversionQueue: ObservableObject {
     @Published public var options: ConversionOptions
     @Published public private(set) var items: [ConversionQueueItem] = []
     @Published public private(set) var groups: [ConversionGroup] = []
+    @Published public private(set) var downloads: [MediaItem] = []
     @Published public private(set) var progress: Double = 0
     @Published public private(set) var isConverting = false
     @Published public var message: String?
@@ -54,6 +55,7 @@ public final class ConversionQueue: ObservableObject {
     /// the operator's decks, so nothing below reaches for `BinStorage` directly.
     public let binRootURL: URL
     public let binPresentationsURL: URL
+    public let binDownloadsURL: URL
 
     /// The old bin location to bring decks across from, or nil not to look.
     private let legacyBinURL: URL?
@@ -98,7 +100,8 @@ public final class ConversionQueue: ObservableObject {
         package: PackageOperation? = nil,
         binRoot: URL = BinStorage.rootURL,
         presentationsDirectory: URL = BinStorage.presentationsDirectory,
-        legacyBin: URL? = AppIdentity.current.ownsLegacyBin ? BinStorage.legacyRootURL : nil
+        legacyBin: URL? = AppIdentity.current.ownsLegacyBin ? BinStorage.legacyRootURL : nil,
+        downloadsDirectory: URL? = nil
     ) {
         self.options = options
         self.convertOne = convert
@@ -107,6 +110,7 @@ public final class ConversionQueue: ObservableObject {
         }
         self.binRootURL = binRoot
         self.binPresentationsURL = presentationsDirectory
+        self.binDownloadsURL = downloadsDirectory ?? BinStorage.downloadsDirectory(besideBin: binRoot)
         self.legacyBinURL = legacyBin
     }
 
@@ -296,15 +300,17 @@ public final class ConversionQueue: ObservableObject {
     public func reloadBin() {
         let root = binRootURL
         let legacy = legacyBinURL
+        let downloadsURL = binDownloadsURL
         Task { [weak self] in
-            let scanned = await Task.detached(priority: .utility) {
+            let (scanned, media) = await Task.detached(priority: .utility) { () -> ([ConversionGroup], [MediaItem]) in
                 // Before the first scan of a fresh bin, bring across anything
                 // left in the old Application Support location, where
                 // ProPresenter could never read it.
                 if let legacy { BinStorage.migrateDecks(from: legacy, to: root) }
-                return ConversionQueue.scanBin(at: root)
+                return (ConversionQueue.scanBin(at: root), MediaItem.scan(in: downloadsURL))
             }.value
             self?.groups = scanned
+            self?.downloads = media
             self?.discoverPresentations()
         }
     }
@@ -317,6 +323,35 @@ public final class ConversionQueue: ObservableObject {
             guard !ConversionGroup.exportedImages(in: folder).isEmpty else { return nil }
             return ConversionGroup(sourceName: folder.lastPathComponent, folderURL: folder)
         }
+    }
+
+    // MARK: - Downloads
+
+    /// What dragging a download hands over: the media file itself, or nil if it
+    /// has since been deleted. Unlike a deck there is only one payload, so the
+    /// drag mode does not apply.
+    public func dragPayload(for item: MediaItem) -> URL? {
+        FileManager.default.fileExists(atPath: item.fileURL.path) ? item.fileURL : nil
+    }
+
+    /// Deletes one download and its thumbnail.
+    public func remove(download item: MediaItem) throws {
+        try FileManager.default.removeItem(at: item.fileURL)
+        try? FileManager.default.removeItem(at: MediaItem.thumbnailURL(for: item.fileURL))
+        downloads.removeAll { $0.id == item.id }
+    }
+
+    /// Copies a download into a folder the operator chose.
+    public func save(download item: MediaItem, to destination: URL) throws {
+        let scoped = destination.startAccessingSecurityScopedResource()
+        defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let target = destination.appendingPathComponent(item.fileURL.lastPathComponent)
+        // Saving into the folder the file already lives in would delete it
+        // before the copy and lose it.
+        guard target.standardizedFileURL != item.fileURL.standardizedFileURL else { return }
+        try? FileManager.default.removeItem(at: target)
+        try FileManager.default.copyItem(at: item.fileURL, to: target)
     }
 
     // MARK: - ProPresenter presentations
@@ -519,6 +554,8 @@ public final class ConversionQueue: ObservableObject {
         // `try?`: the folder may never have been created, and failing to clear a
         // bin because of that would be worse than leaving it.
         try? FileManager.default.removeItem(at: binPresentationsURL)
+        try? FileManager.default.removeItem(at: binDownloadsURL)
+        downloads = []
         reloadBin()
     }
 }
