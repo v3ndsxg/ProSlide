@@ -89,6 +89,7 @@ What each image reference holds, and what it deliberately leaves out:
 - `Sources/FileConverterCore/`: the conversion engine, batch queue and `.probundle` packaging.
 - `Tests/FileConverterTests/`: tests and fixtures.
 - `Scripts/make-app-bundle.sh`: builds `ProSlide.app` from `swift build`.
+- `Scripts/check-probundle.py`: checks `.probundle` files with no Swift and no Mac (see below).
 
 ## Development
 Open `App/ProSlide.xcodeproj` in Xcode, or use the package directly. When you add or rename a file under `App/ProSlide/`, also add it to the `ProSlideApp` target in `Package.swift`, or it will be missing from the installed app.
@@ -100,9 +101,13 @@ swift test
 ```
 - `EngineSmokeTests`: PDF and PPTX at every resolution preset (HD, Full HD, 4K), checking output size and orientation. The PPTX test is skipped without LibreOffice.
 - `ConversionQueueTests`: the batch queue through an injected converter and packager, against a temporary bin, with no window or LibreOffice.
-- `ProPresenterPackageTests`: the zip and `.pro` writers, read back with an independent zip reader, an independent protobuf reader and the system's `unzip`, plus an end-to-end bundle built from `sample.pdf`. These tests can't prove ProPresenter accepts a file; only an import can.
+- `ProPresenterPackageTests`: the zip and `.pro` writers, read back with an independent zip reader, an independent protobuf reader and the system's `unzip`, plus end-to-end bundles built from each fixture (the PowerPoint ones skipped without LibreOffice). These tests can't prove ProPresenter accepts a file; only an import can.
 
-CI runs all of this on a macOS runner and packages the app with the install script.
+CI runs all of this on a macOS runner and packages the app with the install script. It then runs `Scripts/check-probundle.py` on the bundles the end-to-end tests built, and uploads them with the run's `test-artifacts`, ready to drag into ProPresenter. The checker is standard-library Python that shares no code with the Swift writer. It checks the zip, the layout, every JPEG, and the `.pro`'s cues, UUIDs, media paths and sizes. It runs anywhere, including Linux:
+
+```
+python3 -I Scripts/check-probundle.py Deck.probundle   # or a folder of them
+```
 
 ## Security
 - Untrusted PDFs and PowerPoint files are parsed by PDFKit and LibreOffice. A crafted file could try to exploit a parser bug, so keep macOS and LibreOffice updated.
