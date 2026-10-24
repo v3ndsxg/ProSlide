@@ -33,28 +33,42 @@ public final class ConversionQueue: ObservableObject {
 
     /// Which of the two card-drag payloads the bin offers.
     ///
-    /// Deliberately not a toggle that controls writing: presentations are always
-    /// written to every deck, because a presentation is a small manifest plus one
-    /// hard link per slide, and there is nothing to save by deferring it.
-    /// Switching modes is therefore instant and cannot leave a stale file behind.
+    /// Deliberately not a toggle that controls writing: every conversion writes
+    /// its deck's bundle as part of the same run, so switching modes is instant
+    /// and a drag only ever hands over a file that already exists.
     @Published public var dragMode: DragMode = .presentation
 
-    /// Built presentations, keyed by deck folder path. Populated in the
-    /// background so a card is never waiting on a disk write when it is dragged.
+    /// Written bundles, keyed by deck folder path. Filled by a conversion or a
+    /// rebuild as it writes them, and at launch from the bundles already on
+    /// disk — opening the app never builds one.
     @Published public private(set) var presentations: [String: URL] = [:]
 
     /// Decks whose presentation could not be written, keyed by deck folder path.
     @Published public private(set) var presentationFailures: [String: String] = [:]
 
-    public var binRootURL: URL { BinStorage.rootURL }
-    public var binPresentationsURL: URL { BinStorage.presentationsDirectory }
+    /// Decks whose bundle a rebuild is writing right now, keyed by folder path.
+    @Published public private(set) var presentationsInProgress: Set<String> = []
+
+    /// Where this queue's bin lives. The real one in the app; a temporary folder
+    /// in tests. A test that scanned the real bin and then cleared it deleted
+    /// the operator's decks, so nothing below reaches for `BinStorage` directly.
+    public let binRootURL: URL
+    public let binPresentationsURL: URL
+
+    /// The old bin location to bring decks across from, or nil not to look.
+    private let legacyBinURL: URL?
 
     /// The single-file conversion injected by the initialiser. Deliberately
     /// not named `convert`: a stored property and a `convert()` method cannot
     /// share a name in one type.
     private let convertOne: ConvertOperation
+
+    /// Writes one deck's bundle. Injected so the queue's tests never write
+    /// into the real bin.
+    public typealias PackageOperation = @Sendable (ConversionGroup) throws -> URL
+    private let packageOne: PackageOperation
+
     private var runTask: Task<Void, Never>?
-    private var presentationTask: Task<Void, Never>?
     private var temporaryProfile: URL?
 
     /// Which security scope was taken for each item, so it is released
@@ -78,16 +92,29 @@ public final class ConversionQueue: ObservableObject {
             }
         })
     }
-    init(options: ConversionOptions, convert: @escaping ConvertOperation) {
+    init(
+        options: ConversionOptions,
+        convert: @escaping ConvertOperation,
+        package: PackageOperation? = nil,
+        binRoot: URL = BinStorage.rootURL,
+        presentationsDirectory: URL = BinStorage.presentationsDirectory,
+        legacyBin: URL? = BinStorage.legacyRootURL
+    ) {
         self.options = options
         self.convertOne = convert
+        self.packageOne = package ?? { group in
+            try ProPresenterPackage.package(group: group, destinationDirectory: presentationsDirectory)
+        }
+        self.binRootURL = binRoot
+        self.binPresentationsURL = presentationsDirectory
+        self.legacyBinURL = legacyBin
     }
 
     // MARK: - Input
 
-    /// Adds documents to the queue, ignoring anything that is not a PDF or
-    /// .pptx. Unsupported files are reported together rather than failing the
-    /// whole batch.
+    /// Adds documents to the queue, ignoring anything that is not a PDF,
+    /// .pptx or .ppt. Unsupported files are reported together rather than
+    /// failing the whole batch.
     public func accept(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
 
@@ -132,7 +159,7 @@ public final class ConversionQueue: ObservableObject {
     }
 
     public static func isSupported(_ url: URL) -> Bool {
-        ["pdf", "pptx"].contains(url.pathExtension.lowercased())
+        ConversionEngine.supportedExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// Folds a converter's progress within the current file into overall batch
@@ -193,6 +220,12 @@ public final class ConversionQueue: ObservableObject {
                             self.progress = value
                         }
                     }
+                    // The bundle is part of the same run, so by the time the
+                    // deck reaches the bin its card is ready to drag. A bundle
+                    // that fails is reported on the card; the JPEGs still stand.
+                    await self.writePresentation(
+                        ConversionGroup(sourceName: folder.lastPathComponent, folderURL: folder)
+                    )
                     // `accept` may re-sort `items` while this file was in
                     // flight, so look the row up again rather than trusting the
                     // index captured above.
@@ -261,17 +294,18 @@ public final class ConversionQueue: ObservableObject {
     /// Scans the bin off the main actor and publishes the result, so a large
     /// bin cannot stall the window while it opens.
     public func reloadBin() {
-        let root = BinStorage.rootURL
+        let root = binRootURL
+        let legacy = legacyBinURL
         Task { [weak self] in
             let scanned = await Task.detached(priority: .utility) {
                 // Before the first scan of a fresh bin, bring across anything
                 // left in the old Application Support location, where
                 // ProPresenter could never read it.
-                BinStorage.migrateLegacyBin(to: root)
+                if let legacy { BinStorage.migrateDecks(from: legacy, to: root) }
                 return ConversionQueue.scanBin(at: root)
             }.value
             self?.groups = scanned
-            self?.rebuildPresentations()
+            self?.discoverPresentations()
         }
     }
 
@@ -294,7 +328,7 @@ public final class ConversionQueue: ObservableObject {
     /// folder. One existed, and it was harmful: a deck whose presentation could
     /// not be written dragged its JPEG folder instead, which is a different
     /// payload producing a different result in ProPresenter. The two were
-    /// indistinguishable from the outside, so a `.pro` that failed to be written
+    /// indistinguishable from the outside, so a presentation that failed to be written
     /// at all looked exactly like a working drag — and six commits of work on the
     /// writer went untested because of it.
     ///
@@ -313,17 +347,18 @@ public final class ConversionQueue: ObservableObject {
     ///
     /// In JPEG Files mode the images are all that is dragged and they already
     /// exist, so the card is ready whatever became of its presentation. In
-    /// presentation mode a deck is ready only once its `.pro` is written; a stale
-    /// failure is ignored when a presentation exists, so a rebuild that worked
-    /// clears the chip.
+    /// presentation mode a deck is ready only once its bundle is written; a stale
+    /// failure is ignored when a bundle exists, so a rebuild that worked clears
+    /// the chip.
     public func deckStatus(for group: ConversionGroup) -> DeckStatus {
         switch dragMode {
         case .jpegFolder:
             return .ready
         case .presentation:
+            if presentationsInProgress.contains(group.id) { return .preparing }
             if presentation(for: group) != nil { return .ready }
             if let reason = presentationFailures[group.id] { return .failed(reason) }
-            return .preparing
+            return .missing
         }
     }
 
@@ -332,50 +367,67 @@ public final class ConversionQueue: ObservableObject {
         presentations[group.id]
     }
 
-    /// Writes one presentation now, ignoring the cache. The per-card button calls
-    /// this so a deck can be rewritten after its JPEGs changed.
+    /// Writes one deck's bundle now, replacing any it already has. The per-card
+    /// button calls this, which is also the only way a deck converted before
+    /// bundles existed gets one.
     public func buildPresentation(_ group: ConversionGroup) {
-        let result = Task.detached(priority: .userInitiated) {
-            Result { try ProPresenterPackage.package(group: group) }
-        }
+        guard !presentationsInProgress.contains(group.id) else { return }
+        presentationsInProgress.insert(group.id)
         Task { [weak self] in
-            guard let self else { return }
-            switch await result.value {
-            case .success(let url): presentations[group.id] = url
-            case .failure(let error): recordPresentationFailure(Self.message(for: error), for: group)
+            await self?.writePresentation(group)
+            self?.presentationsInProgress.remove(group.id)
+        }
+    }
+
+    /// Writes `group`'s bundle off the main actor and records the outcome.
+    private func writePresentation(_ group: ConversionGroup) async {
+        let packageOne = self.packageOne
+        let result = await Task.detached(priority: .userInitiated) {
+            Result { try packageOne(group) }
+        }.value
+        switch result {
+        case .success(let url):
+            // Every conversion of one document shares one bundle, so another
+            // deck that pointed here now names this deck's slides. It goes back
+            // to not built rather than dragging something it did not make.
+            for (other, existing) in presentations where existing == url && other != group.id {
+                presentations[other] = nil
             }
+            presentations[group.id] = url
+            presentationFailures[group.id] = nil
+        case .failure(let error):
+            recordPresentationFailure(Self.message(for: error), for: group)
         }
     }
 
     /// Records why a deck's presentation could not be written.
     ///
     /// Split out from the write itself so the failure path can be exercised
-    /// directly. Provoking a genuine failure — a missing ProPresenter library, or
-    /// a denied write — is the only way to prove a failure is *reported* rather
-    /// than swallowed, and that cannot be arranged on demand. The silent
-    /// fallback this now backs was itself caused by nobody testing it.
+    /// directly. Provoking a genuine failure — a full disk, or a denied write —
+    /// is the only way to prove a failure is *reported* rather than swallowed,
+    /// and that cannot be arranged on demand. The silent fallback this now backs
+    /// was itself caused by nobody testing it.
     public func recordPresentationFailure(_ message: String, for group: ConversionGroup) {
         presentations[group.id] = nil
         presentationFailures[group.id] = message
     }
 
-    /// Writes a presentation for every deck that does not have a current one.
-    private func rebuildPresentations() {
-        let outstanding = groups.filter { presentations[$0.id] == nil && presentationFailures[$0.id] == nil }
-        guard !outstanding.isEmpty else { return }
-        // Replace any run still in flight: its results were for an older bin.
-        presentationTask?.cancel()
-        presentationTask = Task { [weak self] in
-            for group in outstanding {
-                if Task.isCancelled { return }
-                guard let self else { return }
-                let result = await Task.detached(priority: .utility) {
-                    Result { try ProPresenterPackage.package(group: group) }
-                }.value
-                switch result {
-                case .success(let url): presentations[group.id] = url
-                case .failure(let error): recordPresentationFailure(Self.message(for: error), for: group)
-                }
+    /// Offers every bundle already written for the decks in the bin.
+    ///
+    /// Reads only: opening the app never builds a bundle. A deck without one
+    /// shows as not built until it is converted again or rebuilt, and a
+    /// `.partial` left by an interrupted build is never picked up.
+    ///
+    /// Two conversions of one document share a bundle. It goes to the newest,
+    /// `Name JPEGs 2` over `Name JPEGs` — the bin lists newest first — which is
+    /// the deck that wrote it unless an older one was rebuilt since.
+    private func discoverPresentations() {
+        var claimed = Set(presentations.values)
+        for group in groups where presentations[group.id] == nil {
+            if let url = ProPresenterPackage.existingBundle(for: group, in: binPresentationsURL),
+               !claimed.contains(url) {
+                presentations[group.id] = url
+                claimed.insert(url)
             }
         }
     }
@@ -394,8 +446,8 @@ public final class ConversionQueue: ObservableObject {
     /// One sentence naming how many decks could not be written and why the first
     /// one could not.
     ///
-    /// The reason matters more than the count. "ProPresenter's folder was not
-    /// found at …" tells the operator what to go and fix; a bare count tells them
+    /// The reason matters more than the count. "The size of Deck-004.jpg could
+    /// not be read" tells the operator what to go and fix; a bare count tells them
     /// only that something is wrong somewhere.
     public var presentationFailureSummary: String {
         let failures = presentationFailureMessages
@@ -429,7 +481,7 @@ public final class ConversionQueue: ObservableObject {
         }
     }
 
-    /// Copies a deck's `.pro` into a folder the operator chose.
+    /// Copies a deck's `.probundle` into a folder the operator chose.
     ///
     /// The presentation mode counterpart to `save(group:to:)`: what it writes is
     /// the payload the card drags, not the deck's loose images.
@@ -446,40 +498,27 @@ public final class ConversionQueue: ObservableObject {
         try FileManager.default.copyItem(at: source, to: target)
     }
 
-    /// Resets the app to a clean slate: empties the bin (every converted document,
-    /// the `.pro` written for each, and the media staged into ProPresenter's tree
-    /// for it) and clears the file list on the main page.
+    /// Resets the app to a clean slate: empties the bin (every converted document
+    /// and the bundle written for each) and clears the file list on the main page.
     ///
     /// Presentations live in their own folder rather than inside each document's,
-    /// so that folder has to go too or Clear would leave them behind — and the
-    /// staged links have to go with it, or ProPresenter's media folder keeps a
-    /// name for every slide after the deck that produced them is gone.
+    /// so that folder has to go too or Clear would leave them behind. Nothing in
+    /// ProPresenter's own folders is touched: what it imported is its own copy.
     ///
     /// The file list is left alone while a batch is running, since those files are
     /// in use; the UI does not offer Clear then.
     ///
-    /// The two locations are parameters so a test can point them at temporary
-    /// folders instead of the operator's real ones.
-    public func clearBin(
-        presentationsDirectory: URL = BinStorage.presentationsDirectory,
-        showRoot: URL = ProPresenterInstallation.defaultDocumentRoot
-    ) throws {
+    public func clearBin() throws {
         removeAll()
         message = nil
-        presentationTask?.cancel()
         presentations = [:]
         presentationFailures = [:]
         for folder in groups.map(\.folderURL) {
             try FileManager.default.removeItem(at: folder)
         }
-        for group in groups {
-            try? FileManager.default.removeItem(
-                at: ProPresenterPackage.stagedMediaDirectory(for: group, in: showRoot)
-            )
-        }
         // `try?`: the folder may never have been created, and failing to clear a
         // bin because of that would be worse than leaving it.
-        try? FileManager.default.removeItem(at: presentationsDirectory)
+        try? FileManager.default.removeItem(at: binPresentationsURL)
         reloadBin()
     }
 }

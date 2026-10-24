@@ -132,13 +132,8 @@ final class ConversionQueueTests: XCTestCase {
         queue.message = "a leftover notice"
         XCTAssertEqual(queue.items.count, 2)
 
-        let presentations = try makeTemporaryDirectory()
-        let showRoot = try makeTemporaryDirectory()
-        defer {
-            try? FileManager.default.removeItem(at: presentations)
-            try? FileManager.default.removeItem(at: showRoot)
-        }
-        try queue.clearBin(presentationsDirectory: presentations, showRoot: showRoot)
+        let presentations = queue.binPresentationsURL
+        try queue.clearBin()
 
         XCTAssertTrue(queue.items.isEmpty, "the queued files are cleared along with the bin")
         XCTAssertNil(queue.message)
@@ -148,6 +143,108 @@ final class ConversionQueueTests: XCTestCase {
             FileManager.default.fileExists(atPath: presentations.path),
             "and the presentations folder it was told to empty"
         )
+    }
+
+    // MARK: - Bundles
+
+    /// The bundle is written as part of the same run that renders the JPEGs,
+    /// so a deck is ready to drag the moment it reaches the bin — dragging only
+    /// ever hands over a file that already exists.
+    func testConversionWritesEachDecksBundleInTheSameRun() async throws {
+        let packaged = Packaged()
+        let queue = makeQueue(Recorder(), packaged: packaged)
+        queue.accept(["b.pdf", "a.pdf"].map(fileURL))
+
+        queue.convert()
+        await waitUntilIdle(queue)
+
+        XCTAssertEqual(packaged.names, ["a", "b"], "one bundle per converted deck, in batch order")
+        for name in ["a", "b"] {
+            let group = ConversionGroup(sourceName: name, folderURL: fileURL(name))
+            XCTAssertEqual(queue.presentation(for: group), URL(fileURLWithPath: "/tmp/\(name).probundle"))
+            XCTAssertEqual(queue.deckStatus(for: group), .ready)
+        }
+    }
+
+    /// A bundle that cannot be written is reported on the deck's card, but the
+    /// conversion itself succeeded: the JPEGs are there and still drag.
+    func testABundleFailureDoesNotFailTheConversion() async throws {
+        let queue = makeQueue(Recorder(), failingPackages: ["a"])
+        queue.accept([fileURL("a.pdf")])
+
+        queue.convert()
+        await waitUntilIdle(queue)
+
+        XCTAssertTrue(try XCTUnwrap(queue.items.first).status.isSucceeded)
+        let group = ConversionGroup(sourceName: "a", folderURL: fileURL("a"))
+        XCTAssertEqual(queue.deckStatus(for: group), .failed(ProPackageError.tooLarge.errorDescription!))
+        queue.dragMode = .jpegFolder
+        XCTAssertEqual(queue.deckStatus(for: group), .ready)
+    }
+
+    /// A deck that failed is rebuilt from its card, and a rebuild that works
+    /// clears the failure.
+    func testRebuildWritesTheBundleAndClearsAnEarlierFailure() async throws {
+        let packaged = Packaged()
+        let queue = makeQueue(Recorder(), packaged: packaged)
+        let group = ConversionGroup(sourceName: "Deck JPEGs", folderURL: URL(fileURLWithPath: "/tmp/none"))
+        queue.recordPresentationFailure("boom", for: group)
+
+        queue.buildPresentation(group)
+        XCTAssertEqual(queue.deckStatus(for: group), .preparing)
+        let deadline = Date().addingTimeInterval(5)
+        while queue.presentation(for: group) == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+
+        XCTAssertEqual(packaged.names, ["Deck"])
+        XCTAssertEqual(queue.deckStatus(for: group), .ready)
+        XCTAssertNil(queue.presentationFailures[group.id])
+    }
+
+    /// Clear removes the decks in the queue's own bin and nothing else. It is
+    /// pointed at a temporary bin here, which is the point: the version of this
+    /// suite that scanned the real one deleted real decks.
+    func testClearRemovesOnlyTheDecksInItsOwnBin() async throws {
+        let queue = makeQueue(Recorder())
+        let deck = queue.binRootURL.appendingPathComponent("Deck JPEGs", isDirectory: true)
+        try FileManager.default.createDirectory(at: deck, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: deck.appendingPathComponent("Deck-001.jpg"))
+        let elsewhere = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: elsewhere) }
+        try Data("x".utf8).write(to: elsewhere.appendingPathComponent("Other-001.jpg"))
+
+        queue.reloadBin()
+        let deadline = Date().addingTimeInterval(5)
+        while queue.groups.isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 2_000_000)
+        }
+        XCTAssertEqual(queue.groups.map(\.folderURL.lastPathComponent), ["Deck JPEGs"])
+
+        try queue.clearBin()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: deck.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: elsewhere.appendingPathComponent("Other-001.jpg").path))
+    }
+
+    /// Two conversions of one document share a bundle. Whichever was built last
+    /// owns it, and the other goes back to not built rather than dragging
+    /// slides it did not make.
+    func testBuildingOneConversionUnclaimsTheOthersSharedBundle() async throws {
+        let queue = makeQueue(Recorder())
+        let first = ConversionGroup(sourceName: "Deck JPEGs", folderURL: URL(fileURLWithPath: "/tmp/Deck JPEGs"))
+        let second = ConversionGroup(sourceName: "Deck JPEGs 2", folderURL: URL(fileURLWithPath: "/tmp/Deck JPEGs 2"))
+
+        for group in [first, second] {
+            queue.buildPresentation(group)
+            let deadline = Date().addingTimeInterval(5)
+            while queue.presentation(for: group) == nil, Date() < deadline {
+                try await Task.sleep(nanoseconds: 2_000_000)
+            }
+        }
+
+        XCTAssertEqual(queue.presentation(for: second), URL(fileURLWithPath: "/tmp/Deck.probundle"))
+        XCTAssertNil(queue.presentation(for: first))
+        XCTAssertEqual(queue.deckStatus(for: first), .missing)
     }
 
     // MARK: - Deck status
@@ -162,8 +259,8 @@ final class ConversionQueueTests: XCTestCase {
         let group = ConversionGroup(sourceName: "Deck JPEGs", folderURL: URL(fileURLWithPath: "/tmp/none"))
         queue.dragMode = .presentation
 
-        XCTAssertEqual(queue.deckStatus(for: group), .preparing, "nothing written and nothing failed yet")
-        XCTAssertEqual(queue.deckStatus(for: group).title, "Preparing\u{2026}")
+        XCTAssertEqual(queue.deckStatus(for: group), .missing, "nothing written and nothing failed yet")
+        XCTAssertEqual(queue.deckStatus(for: group).title, "Not built")
 
         queue.recordPresentationFailure("The folder is missing.", for: group)
         XCTAssertEqual(queue.deckStatus(for: group), .failed("The folder is missing."))
@@ -240,14 +337,14 @@ final class ConversionQueueTests: XCTestCase {
 
     // MARK: - Drag modes
 
-    /// The bin offers both a JPEG-folder drag and a `.pro` drag. `.pro` is the
-    /// default because it is the reason the deck is packaged at all, but the
+    /// The bin offers both a JPEG-folder drag and a bundle drag. The bundle is
+    /// the default because it is the reason the deck is packaged at all, but the
     /// folder has to stay reachable — it is what you want when pulling slides
     /// into a presentation you already have.
     ///
     /// Presentation mode has no fallback: a deck with no presentation drags
     /// nothing at all, rather than quietly handing over its JPEG folder. The
-    /// fallback is what made a failed `.pro` look like a working drag.
+    /// fallback is what made a failed presentation look like a working drag.
     func testDragModeDefaultsToThePresentationAndCanSwitchToTheFolder() {
         let queue = ConversionQueue()
         XCTAssertEqual(queue.dragMode, .presentation)
@@ -281,7 +378,7 @@ final class ConversionQueueTests: XCTestCase {
         try Data("x".utf8).write(to: folder.appendingPathComponent("Deck-001.jpg"))
 
         let group = ConversionGroup(sourceName: "Deck JPEGs", folderURL: folder)
-        queue.recordPresentationFailure("ProPresenter's folder was not found.", for: group)
+        queue.recordPresentationFailure("The presentation could not be written.", for: group)
 
         XCTAssertNil(
             queue.dragPayload(for: group),
@@ -408,6 +505,15 @@ final class ConversionQueueTests: XCTestCase {
 
         XCTAssertEqual(queue.items.map(\.fileName), ["a.pdf", "b.pdf"])
         XCTAssertEqual(try XCTUnwrap(queue.message), "Skipped 1 unsupported file: virus.exe")
+    }
+
+    /// Old binary `.ppt` decks are accepted alongside `.pptx`; LibreOffice
+    /// converts both.
+    func testLegacyPowerPointFilesAreAccepted() throws {
+        let queue = makeQueue(Recorder())
+        queue.accept(["a.ppt", "b.PPTX", "c.pdf", "d.key"].map(fileURL))
+        XCTAssertEqual(queue.items.map(\.fileName), ["a.ppt", "b.PPTX", "c.pdf"])
+        XCTAssertEqual(queue.message, "Skipped 1 unsupported file: d.key")
     }
 
     func testSeveralUnsupportedFilesAreReportedTogether() throws {
@@ -616,9 +722,45 @@ final class ConversionQueueTests: XCTestCase {
         }
     }
 
-    private func makeQueue(_ recorder: Recorder) -> ConversionQueue {
-        ConversionQueue(options: ConversionOptions()) { url, _, _, progress in
-            try await recorder.run(url, report: progress)
+    /// A queue around the fake converter. Packaging is faked too, so no test
+    /// writes into the real bin: it records which decks were packaged, and
+    /// fails for any deck named in `failingPackages`.
+    private func makeQueue(
+        _ recorder: Recorder,
+        packaged: Packaged = Packaged(),
+        failingPackages: Set<String> = []
+    ) -> ConversionQueue {
+        // Never the real bin: Clear deletes every deck the queue has scanned,
+        // and a queue pointed at `~/Documents/ProSlide/Bin` once deleted the
+        // operator's decks from a test run.
+        let bin = (try? makeTemporaryDirectory()) ?? URL(fileURLWithPath: NSTemporaryDirectory())
+        addTeardownBlock { try? FileManager.default.removeItem(at: bin) }
+        return ConversionQueue(
+            options: ConversionOptions(),
+            convert: { url, _, _, progress in try await recorder.run(url, report: progress) },
+            package: { group in
+                packaged.append(group.displayName)
+                if failingPackages.contains(group.displayName) { throw ProPackageError.tooLarge }
+                return URL(fileURLWithPath: "/tmp/\(group.documentName).probundle")
+            },
+            binRoot: bin.appendingPathComponent("Bin", isDirectory: true),
+            presentationsDirectory: bin.appendingPathComponent("Pro", isDirectory: true),
+            legacyBin: nil
+        )
+    }
+
+    private final class Packaged: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [String] = []
+
+        var names: [String] {
+            lock.lock(); defer { lock.unlock() }
+            return recorded
+        }
+
+        func append(_ name: String) {
+            lock.lock(); defer { lock.unlock() }
+            recorded.append(name)
         }
     }
 

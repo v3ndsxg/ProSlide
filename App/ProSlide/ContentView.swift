@@ -20,7 +20,7 @@ struct ContentView: View {
             mainPane
                 .fileImporter(
                     isPresented: $showingImporter,
-                    allowedContentTypes: [.pdf, UTType(filenameExtension: "pptx")!],
+                    allowedContentTypes: [.pdf] + ["pptx", "ppt"].compactMap { UTType(filenameExtension: $0) },
                     allowsMultipleSelection: true
                 ) { result in
                     if case .success(let urls) = result { queue.accept(urls) }
@@ -35,7 +35,7 @@ struct ContentView: View {
                             // What is saved is what the card drags. It used to always
                             // be the JPEG folder, in presentation mode too -- beside a
                             // caption describing a different payload, which is how a
-                            // working `.pro` came to be believed missing.
+                            // working presentation came to be believed missing.
                             if queue.dragMode == .presentation {
                                 try queue.savePresentation(for: group, to: url)
                             } else {
@@ -93,7 +93,7 @@ struct ContentView: View {
             VStack(spacing: 8) {
                 Image(systemName: "doc.badge.plus").font(.system(size: 34))
                 Text(queue.items.isEmpty
-                     ? "Drop PDF or .pptx files here"
+                     ? "Drop PDF, .pptx or .ppt files here"
                      : "\(queue.items.count) file\(queue.items.count == 1 ? "" : "s") queued")
                 Text("or click to choose files").font(.caption).foregroundStyle(.secondary)
             }
@@ -303,7 +303,7 @@ struct ContentView: View {
         let color: Color
         switch status {
         case .ready: color = .green
-        case .preparing: color = .gray
+        case .preparing, .missing: color = .gray
         case .failed: color = .red
         }
         return Text(status.title)
@@ -315,11 +315,20 @@ struct ContentView: View {
             .fixedSize()
     }
 
-    /// What a deck shows when opened: its slides, or -- when its presentation
-    /// could not be written -- why, with the one button that can fix it.
+    /// What a deck shows when opened: its slides, or -- when it has no
+    /// presentation to drag -- why, with the one button that can fix it.
     @ViewBuilder
     private func deckDetail(_ group: ConversionGroup, status: DeckStatus) -> some View {
-        if case .failed(let reason) = status {
+        if status == .missing {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("This deck has no ProPresenter bundle yet. Build one to drag it as a presentation.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Build presentation") { queue.buildPresentation(group) }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+        } else if case .failed(let reason) = status {
             VStack(alignment: .leading, spacing: 8) {
                 Text(reason)
                     .font(.caption).foregroundStyle(.red)
@@ -363,7 +372,7 @@ struct ContentView: View {
         .onDrag { NSItemProvider(object: imageURL as NSURL) }
     }
 
-    /// Reveals what the card drags: the `.pro` in presentation mode once it
+    /// Reveals what the card drags: the `.probundle` in presentation mode once it
     /// exists, otherwise the deck's folder.
     private func reveal(_ group: ConversionGroup) {
         if queue.dragMode == .presentation, let presentation = queue.presentation(for: group) {
