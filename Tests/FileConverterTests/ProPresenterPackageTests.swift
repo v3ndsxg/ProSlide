@@ -443,17 +443,34 @@ final class ProPresenterPackageTests: XCTestCase {
         ConversionGroup(sourceName: folder, folderURL: URL(fileURLWithPath: "/tmp/\(folder)"))
     }
 
-    /// End to end on real output: `sample.pdf` through the conversion engine,
+    /// End to end on real output: each fixture through the conversion engine,
     /// then packaged, then checked by `unzip` and decoded. The fake decks above
-    /// hold placeholder bytes; this one holds a real JPEG with real dimensions.
+    /// hold placeholder bytes; these hold real JPEGs with real dimensions.
+    ///
+    /// CI also hands the bundles these write to Scripts/check-probundle.py,
+    /// which shares no code with the writer or these readers.
     func testSamplePDFBecomesAValidBundle() async throws {
+        try await assertFixtureBecomesAValidBundle("sample.pdf")
+    }
+
+    func testSamplePPTXBecomesAValidBundle() async throws {
+        try XCTSkipUnless(ConversionEngine.installedLibreOffice() != nil, "LibreOffice is not installed; skipping PPTX path")
+        try await assertFixtureBecomesAValidBundle("sample.pptx")
+    }
+
+    func testSamplePPTBecomesAValidBundle() async throws {
+        try XCTSkipUnless(ConversionEngine.installedLibreOffice() != nil, "LibreOffice is not installed; skipping PPT path")
+        try await assertFixtureBecomesAValidBundle("sample.ppt")
+    }
+
+    private func assertFixtureBecomesAValidBundle(_ fixture: String) async throws {
         let work = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: work) }
         var options = ConversionOptions()
         options.destination = work
         let sample = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/sample.pdf")
+            .appendingPathComponent("Fixtures/\(fixture)")
 
         let folder = try await ConversionEngine().convert(input: sample, options: options) { _ in }
         let group = ConversionGroup(sourceName: folder.lastPathComponent, folderURL: folder)
@@ -461,6 +478,7 @@ final class ProPresenterPackageTests: XCTestCase {
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
         let bundle = try ProPresenterPackage.package(group: group, destinationDirectory: out)
+        exportBundle(bundle, kind: sample.pathExtension)
 
         let check = try run("/usr/bin/unzip", "-tq", bundle.path)
         XCTAssertEqual(check.status, 0, check.output)
@@ -474,7 +492,7 @@ final class ProPresenterPackageTests: XCTestCase {
         let element = try mediaElement(of: cue)
         XCTAssertEqual(try element.message(2)?.message(4)?.string(2), "Media/Assets/\(image.lastPathComponent)")
         let natural = try XCTUnwrap(element.message(5)?.message(1)?.message(5))
-        XCTAssertEqual(natural.double(1), 1920, "the default Full HD render")
+        XCTAssertEqual(natural.double(1), 1920, "the default Full HD render of a 16:9 page")
         XCTAssertEqual(natural.double(2), 1080)
     }
 
@@ -497,6 +515,19 @@ final class ProPresenterPackageTests: XCTestCase {
     private func mediaElement(of cue: [ProtoReader.Field]) throws -> [ProtoReader.Field] {
         let action = try XCTUnwrap(cue.messages(10).first { $0.uint(9) == 2 })
         return try XCTUnwrap(action.message(20)?.message(5))
+    }
+
+    /// If FILE_CONVERTER_ARTIFACTS is set (CI), copy `bundle` to
+    /// `bundles/<kind>/` there, so CI can check it with
+    /// Scripts/check-probundle.py and upload it to be imported by hand.
+    private func exportBundle(_ bundle: URL, kind: String) {
+        guard let target = ProcessInfo.processInfo.environment["FILE_CONVERTER_ARTIFACTS"] else { return }
+        let folder = URL(fileURLWithPath: target, isDirectory: true)
+            .appendingPathComponent("bundles/\(kind)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let out = folder.appendingPathComponent(bundle.lastPathComponent)
+        try? FileManager.default.removeItem(at: out)
+        try? FileManager.default.copyItem(at: bundle, to: out)
     }
 
     private func makeTemporaryDirectory() throws -> URL {

@@ -65,6 +65,23 @@ jobs:
           FILE_CONVERTER_ARTIFACTS: ${{ runner.temp }}/test-artifacts
         run: swift test 2>&1 | tee test-output.txt
 
+      - name: Check the bundles the tests built
+        # The bundle tests copy each real bundle they build (from sample.pdf,
+        # and from sample.pptx and sample.ppt when LibreOffice installed) into
+        # bundles/<kind>/. The checker is plain Python that shares no code with
+        # the Swift writer, so it can't repeat the writer's mistakes. It runs
+        # even when a test failed, since a bad bundle is often why.
+        #
+        # The PDF bundle is required: without LibreOffice the others are
+        # skipped, but a missing PDF bundle means the export itself broke.
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          BUNDLES: ${{ runner.temp }}/test-artifacts/bundles
+        run: |
+          test -f "$BUNDLES/pdf/sample.probundle" || { echo "the PDF bundle was not exported"; exit 1; }
+          python3 -I Scripts/check-probundle.py "$BUNDLES"
+
       - name: Upload test artifacts
         if: always()
         # actions/upload-artifact v7
@@ -74,4 +91,5 @@ jobs:
           path: |
             test-output.txt
             ${{ runner.temp }}/test-artifacts/**/*.jpg
+            ${{ runner.temp }}/test-artifacts/bundles/**/*.probundle
           if-no-files-found: warn
