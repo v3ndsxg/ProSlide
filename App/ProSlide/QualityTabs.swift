@@ -85,6 +85,20 @@ struct SiteBadgeView: View {
     }
 }
 
+/// The small "MP4" or "MP3" label on a download's card.
+struct FormatTag: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Color.secondary.opacity(0.16), in: RoundedRectangle(cornerRadius: 4))
+    }
+}
+
 private extension Color {
     init(hex: UInt32) {
         self.init(
