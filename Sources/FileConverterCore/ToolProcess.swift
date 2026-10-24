@@ -30,19 +30,77 @@ private struct ReadResult: Sendable {
     var tail: [String] = []
 }
 
+/// Reads one of a tool's output streams on its own thread, in chunks.
+///
+/// This used to read one byte at a time through `FileHandle.bytes`. That
+/// stalled on a long line: a yt-dlp lookup prints about a megabyte of JSON on a
+/// single line, and on a macOS runner even 100 KB of it went quiet for two
+/// minutes, so no lookup ever finished.
+private final class LineReader: @unchecked Sendable {
+    private let lock = NSLock()
+    private let keepAll: Bool
+    private var result = ReadResult()
+    private var done = false
+
+    init(keepAll: Bool) { self.keepAll = keepAll }
+
+    var isFinished: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return done
+    }
+
+    var snapshot: ReadResult {
+        lock.lock(); defer { lock.unlock() }
+        return result
+    }
+
+    func start(_ handle: FileHandle, activity: ToolActivity, onLine: @escaping @Sendable (String) -> Void) {
+        Thread.detachNewThread { [self] in
+            var buffer: [UInt8] = []
+
+            func flush() {
+                guard !buffer.isEmpty else { return }
+                let line = String(decoding: buffer, as: UTF8.self)
+                buffer.removeAll(keepingCapacity: true)
+                lock.lock()
+                if keepAll { result.all.append(line) }
+                result.tail.append(line)
+                if result.tail.count > 40 { result.tail.removeFirst() }
+                lock.unlock()
+                onLine(line)
+            }
+
+            // Lines end at a newline or a carriage return, since ffmpeg redraws
+            // its progress with the latter.
+            while let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty {
+                activity.touch()
+                for byte in chunk {
+                    if byte == 10 || byte == 13 { flush() } else { buffer.append(byte) }
+                }
+            }
+            flush()
+            lock.lock(); done = true; lock.unlock()
+        }
+    }
+}
+
 enum ToolProcess {
     /// Runs one tool to completion, handing every line it prints to `onLine`.
     ///
-    /// Lines end at a newline or a carriage return, since ffmpeg redraws its
-    /// progress with the latter. Cancelling the calling task stops the process;
-    /// so does going `idleTimeout` seconds without a line.
+    /// Cancelling the calling task stops the process and its helpers; so does
+    /// going `idleTimeout` seconds without a line.
     static func run(
         executable: URL,
         arguments: [String],
         keepStdout: Bool = false,
         idleTimeout: TimeInterval,
+        log: DownloadLog? = nil,
         onLine: @escaping @Sendable (String) -> Void
     ) async throws -> ToolResult {
+        let name = executable.lastPathComponent
+        log?.note("RUN \(name) \(arguments.joined(separator: " "))")
+        let started = Date()
+
         let process = Process()
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -53,12 +111,16 @@ enum ToolProcess {
         process.standardInput = FileHandle.nullDevice
 
         let activity = ToolActivity()
-        // Both streams are drained as the tool runs so a chatty one can never
-        // fill a pipe buffer and stall.
-        let outTask = Task { await readLines(outPipe.fileHandleForReading, activity: activity, keepAll: keepStdout, onLine: onLine) }
-        let errTask = Task { await readLines(errPipe.fileHandleForReading, activity: activity, keepAll: false, onLine: onLine) }
+        let record: @Sendable (String) -> Void = { line in
+            log?.note("\(name)> \(line)")
+            onLine(line)
+        }
+        let outReader = LineReader(keepAll: keepStdout)
+        let errReader = LineReader(keepAll: false)
+        outReader.start(outPipe.fileHandleForReading, activity: activity, onLine: record)
+        errReader.start(errPipe.fileHandleForReading, activity: activity, onLine: record)
 
-        let guardian = ProcessGuardian(process)
+        let guardian = ProcessGuardian(process, escalateAfter: 2)
         let watchdog = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 500_000_000)
@@ -88,61 +150,38 @@ enum ToolProcess {
         try? outPipe.fileHandleForWriting.close()
         try? errPipe.fileHandleForWriting.close()
 
+        // The readers finish when the tool closes its end. Don't wait forever:
+        // a helper left holding the pipe would otherwise hang this call.
         let stopped = guardian.reason
-        if stopped != nil {
-            // A killed child can leave a grandchild holding a pipe open, and
-            // the readers would then never see the end.
+        let deadline = Date().addingTimeInterval(stopped == nil ? 5 : 2)
+        while (!outReader.isFinished || !errReader.isFinished) && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        if !outReader.isFinished || !errReader.isFinished {
             try? outPipe.fileHandleForReading.close()
             try? errPipe.fileHandleForReading.close()
         }
-        let out = await outTask.value
-        let err = await errTask.value
 
-        if let startError { throw startError }
-        switch stopped {
-        case .cancelled: throw CancellationError()
-        case .timedOut: throw DownloadError.timedOut
-        case nil: break
+        let seconds = String(format: "%.1f", Date().timeIntervalSince(started))
+        if let startError {
+            log?.note("FAILED TO START \(name): \(startError)")
+            throw startError
         }
+        switch stopped {
+        case .cancelled:
+            log?.note("STOPPED \(name) after \(seconds)s (cancelled)")
+            throw CancellationError()
+        case .timedOut:
+            log?.note("STOPPED \(name) after \(seconds)s (no output for \(Int(idleTimeout))s)")
+            throw DownloadError.timedOut
+        case nil:
+            break
+        }
+        log?.note("EXIT \(name) status=\(process.terminationStatus) after \(seconds)s")
         return ToolResult(
             status: process.terminationStatus,
-            stdout: out.all.joined(separator: "\n"),
-            tail: err.tail + out.tail
+            stdout: outReader.snapshot.all.joined(separator: "\n"),
+            tail: errReader.snapshot.tail + outReader.snapshot.tail
         )
-    }
-
-    private static func readLines(
-        _ handle: FileHandle,
-        activity: ToolActivity,
-        keepAll: Bool,
-        onLine: @escaping @Sendable (String) -> Void
-    ) async -> ReadResult {
-        var result = ReadResult()
-        var buffer: [UInt8] = []
-
-        func flush() {
-            guard !buffer.isEmpty else { return }
-            let line = String(decoding: buffer, as: UTF8.self)
-            buffer.removeAll(keepingCapacity: true)
-            activity.touch()
-            onLine(line)
-            if keepAll { result.all.append(line) }
-            result.tail.append(line)
-            if result.tail.count > 30 { result.tail.removeFirst() }
-        }
-
-        do {
-            for try await byte in handle.bytes {
-                if byte == 10 || byte == 13 {
-                    flush()
-                } else {
-                    buffer.append(byte)
-                    // A very long line, such as the metadata JSON, is still activity.
-                    if buffer.count % 8192 == 0 { activity.touch() }
-                }
-            }
-        } catch {}
-        flush()
-        return result
     }
 }

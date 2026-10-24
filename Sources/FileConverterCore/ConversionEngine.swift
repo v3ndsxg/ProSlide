@@ -305,15 +305,24 @@ public struct ConversionEngine {
 /// been launched, and Stop or the watchdog can fire before, during or after the
 /// launch. This remembers a stop that arrives early and applies it as soon as
 /// the process exists, and never touches one that has already finished.
+///
+/// With `escalateAfter`, the process's helper processes are stopped too, and
+/// anything still running that many seconds later is killed outright. A
+/// PyInstaller program such as yt-dlp runs its real work in a child, and ending
+/// only the launcher can leave that child downloading.
 final class ProcessGuardian: @unchecked Sendable {
     enum Reason { case cancelled, timedOut }
 
     private let process: Process
+    private let escalateAfter: TimeInterval?
     private let lock = NSLock()
     private var started = false
     private var requested: Reason?
 
-    init(_ process: Process) { self.process = process }
+    init(_ process: Process, escalateAfter: TimeInterval? = nil) {
+        self.process = process
+        self.escalateAfter = escalateAfter
+    }
 
     /// Why the process was stopped, or nil if it ran to completion.
     var reason: Reason? {
@@ -338,6 +347,36 @@ final class ProcessGuardian: @unchecked Sendable {
     }
 
     private func terminate() {
-        if process.isRunning { process.terminate() }
+        guard process.isRunning else { return }
+        let pid = process.processIdentifier
+        guard let delay = escalateAfter else {
+            process.terminate()
+            return
+        }
+        let helpers = ProcessGuardian.descendants(of: pid)
+        for helper in helpers { kill(helper, SIGTERM) }
+        process.terminate()
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [process] in
+            for helper in helpers where kill(helper, 0) == 0 { kill(helper, SIGKILL) }
+            if process.isRunning { kill(pid, SIGKILL) }
+        }
+    }
+
+    /// Every process below `pid`, found with `pgrep -P`.
+    private static func descendants(of pid: pid_t, depth: Int = 0) -> [pid_t] {
+        guard depth < 4 else { return [] }
+        let pgrep = Process()
+        let pipe = Pipe()
+        pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        pgrep.arguments = ["-P", String(pid)]
+        pgrep.standardOutput = pipe
+        pgrep.standardError = FileHandle.nullDevice
+        guard (try? pgrep.run()) != nil else { return [] }
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        pgrep.waitUntilExit()
+        let children = String(decoding: output, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .compactMap { pid_t($0) }
+        return children + children.flatMap { descendants(of: $0, depth: depth + 1) }
     }
 }
