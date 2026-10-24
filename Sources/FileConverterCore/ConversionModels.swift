@@ -130,6 +130,17 @@ public enum BinStorage {
         }
     }
 
+    /// Where downloaded videos and audio are kept, beside `Bin` and `Pro`.
+    ///
+    /// A sibling of the bin for the same reason `Pro` is: `scanBin` reads every
+    /// folder in the bin as a deck. Derived from the bin's location rather than
+    /// read from `rootURL`, so a queue pointed at a temporary bin in a test gets
+    /// a temporary downloads folder and never the real one. Not created here;
+    /// the scan treats a missing folder as empty.
+    public static func downloadsDirectory(besideBin bin: URL) -> URL {
+        bin.deletingLastPathComponent().appendingPathComponent("Downloads", isDirectory: true)
+    }
+
     /// Where the `.probundle` files are written.
     ///
     /// Deliberately *outside* each deck's folder. ProPresenter imports a folder
