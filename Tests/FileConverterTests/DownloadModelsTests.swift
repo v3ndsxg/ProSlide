@@ -68,7 +68,51 @@ final class DownloadModelsTests: XCTestCase {
          "formats":[{"vcodec":"none","height":null},{"vcodec":"avc1.64002a","height":1080},{"vcodec":"vp09.00","height":2160},{"vcodec":"none","height":4000}]}
         """
         let info = try VideoInfo.parse(Data(json.utf8))
-        XCTAssertEqual(info, VideoInfo(title: "Sunday", duration: 125.5, maxHeight: 2160, isLive: false))
+        XCTAssertEqual(info, VideoInfo(
+            title: "Sunday", duration: 125.5, maxHeight: 2160, isLive: false,
+            formats: [VideoFormat(resolution: 1080, isH264: true), VideoFormat(resolution: 2160, isH264: false)]
+        ))
+        XCTAssertEqual(info.json, Data(json.utf8), "the raw lookup is kept so a download can start from it")
+        XCTAssertTrue(info.canBeReused)
+    }
+
+    func testPicturesAreMeasuredByTheirShorterSide() throws {
+        let json = """
+        {"title":"t","formats":[
+          {"vcodec":"avc1","width":1080,"height":1920},
+          {"vcodec":"vp09","width":2048,"height":858},
+          {"vcodec":"none","width":4000,"height":4000}]}
+        """
+        let info = try VideoInfo.parse(Data(json.utf8))
+        XCTAssertEqual(info.formats.map(\.resolution), [1080, 858], "a vertical Short is 1080, not 1920")
+        XCTAssertEqual(info.maxHeight, 1080)
+        XCTAssertFalse(DownloadQuality.p1440.isOffered(by: [info]), "a Short must not enable 1440p")
+    }
+
+    func testAVideoWithNoH264AtItsHeightIsToldItWillBeConverted() {
+        // Like a 2048x858 music video: VP9 at 858, H.264 only up to 804.
+        let ultrawide = VideoInfo(title: "c", duration: nil, maxHeight: 858, isLive: false, formats: [
+            VideoFormat(resolution: 804, isH264: true), VideoFormat(resolution: 858, isH264: false),
+        ])
+        XCTAssertTrue(ultrawide.convertsToH264(at: .p1080), "858 beats 804 and has no H.264")
+        XCTAssertFalse(ultrawide.convertsToH264(at: .p720), "nothing is that small, so the smallest, 804, is used, and it is H.264")
+
+        let normal = VideoInfo(title: "a", duration: nil, maxHeight: 2160, isLive: false, formats: [
+            VideoFormat(resolution: 1080, isH264: true), VideoFormat(resolution: 1080, isH264: false),
+            VideoFormat(resolution: 2160, isH264: false),
+        ])
+        XCTAssertFalse(normal.convertsToH264(at: .p1080))
+        XCTAssertTrue(normal.convertsToH264(at: .p2160))
+
+        let unknown = VideoInfo(title: "u", duration: nil, maxHeight: nil, isLive: false)
+        XCTAssertFalse(unknown.convertsToH264(at: .p1080), "nothing is claimed without the details")
+    }
+
+    func testAnOldLookupIsNoLongerReusable() {
+        let old = VideoInfo(title: "x", duration: nil, maxHeight: nil, isLive: false,
+                            json: Data("{}".utf8), fetchedAt: Date(timeIntervalSinceNow: -3 * 3600))
+        XCTAssertFalse(old.canBeReused)
+        XCTAssertFalse(VideoInfo(title: "x", duration: nil, maxHeight: nil, isLive: false).canBeReused, "no saved output to reuse")
     }
 
     func testVideoInfoFallsBackToTheSingleHeightAndAPlaceholderTitle() throws {
@@ -155,6 +199,34 @@ final class DownloadModelsTests: XCTestCase {
         XCTAssertFalse(arguments.contains("-S"))
     }
 
+    func testFastLookupAsksYouTubeForItsQuickestClient() {
+        let url = URL(string: "https://example.com/v")!
+        let fast = DownloadArguments.info(url: url, tools: tools, fast: true)
+        XCTAssertEqual(value(after: "--extractor-args", in: fast), "youtube:player_client=visionos;skip=hls")
+        XCTAssertFalse(DownloadArguments.info(url: url, tools: tools, fast: false).contains("--extractor-args"))
+        XCTAssertEqual(Array(fast.suffix(2)), ["--", url.absoluteString])
+    }
+
+    func testDownloadFromASavedLookupIsGivenNoLink() {
+        let arguments = DownloadArguments.download(
+            url: URL(string: "https://example.com/-o")!,
+            savedLookup: URL(fileURLWithPath: "/work/info.json"),
+            format: .mp4, quality: .p1080, work: URL(fileURLWithPath: "/work"), tools: tools
+        )
+        XCTAssertEqual(value(after: "--load-info-json", in: arguments), "/work/info.json")
+        XCTAssertFalse(arguments.contains("--"))
+        XCTAssertFalse(arguments.contains("https://example.com/-o"))
+        XCTAssertEqual(value(after: "-S", in: arguments), "res:1080,vcodec:h264,acodec:aac", "the same choices are made again")
+    }
+
+    func testWithoutATitleTheFileIsNamedByYtDlp() {
+        let arguments = DownloadArguments.download(
+            url: URL(string: "https://example.com/v")!, titleKnown: false,
+            format: .mp4, quality: .p1080, work: URL(fileURLWithPath: "/work"), tools: tools
+        )
+        XCTAssertTrue(arguments.contains("/work/%(title).120B.%(ext)s"))
+    }
+
     func testConversionCopiesWhatIsAlreadyRight() {
         let copy = DownloadArguments.convert(
             input: URL(fileURLWithPath: "/in.mkv"), output: URL(fileURLWithPath: "/out.mp4"),
@@ -190,29 +262,93 @@ final class DownloadModelsTests: XCTestCase {
 
     // MARK: - Progress
 
-    func testProgressIsSpreadAcrossTheVideoAndAudioStreams() {
-        let parser = ProgressParser(expectedStreams: 2)
+    private let mebibyte = 1_048_576.0
+
+    func testProgressIsWeightedBySizeNotSplitEvenlyBetweenVideoAndAudio() throws {
+        let parser = ProgressParser(format: .mp4)
         XCTAssertNil(parser.consume("[download] Destination: /work/download.f137.mp4"))
-        XCTAssertEqual(parser.consume("[download]  50.0% of 80.00MiB at 5.00MiB/s ETA 00:08"), .downloading(0.25))
-        XCTAssertEqual(parser.consume("[download] 100% of 80.00MiB in 00:16"), .downloading(0.5))
+
+        let half = try XCTUnwrap(parser.consume("[download]  50.0% of ~ 100.00MiB at 5.00MiB/s ETA 00:10"))
+        XCTAssertEqual(half.phase, .video)
+        // 50 of an expected 105 (the audio is guessed at 5% until it starts).
+        XCTAssertEqual(try XCTUnwrap(half.fraction), 50.0 / 105.0, accuracy: 0.001)
+        XCTAssertEqual(half.bytesPerSecond, 5 * mebibyte)
+        XCTAssertEqual(half.secondsLeft, 11, "55 MiB left at 5 MiB/s")
+
+        let videoDone = try XCTUnwrap(parser.consume("[download] 100% of 100.00MiB in 00:20 at 5.00MiB/s"))
+        XCTAssertEqual(try XCTUnwrap(videoDone.fraction), 100.0 / 105.0, accuracy: 0.001,
+                       "finishing the video is about 95%, not 50%")
+
         XCTAssertNil(parser.consume("[download] Destination: /work/download.f140.m4a"))
-        XCTAssertEqual(parser.consume("[download]  50.0% of 3.00MiB"), .downloading(0.75))
-        XCTAssertEqual(parser.consume("[download] 100% of 3.00MiB"), .downloading(1))
-        XCTAssertEqual(parser.consume("[Merger] Merging formats into \"/work/download.mp4\""), .finishing)
+        let audio = try XCTUnwrap(parser.consume("[download]  50.0% of 4.00MiB at 2.00MiB/s"))
+        XCTAssertEqual(audio.phase, .audio)
+        XCTAssertEqual(try XCTUnwrap(audio.fraction), 102.0 / 104.0, accuracy: 0.001, "the real audio size replaces the guess")
+        XCTAssertEqual(try XCTUnwrap(parser.consume("[download] 100% of 4.00MiB")).fraction, 1)
+        XCTAssertEqual(parser.consume("[Merger] Merging formats into \"/work/download.mp4\"")?.phase, .merging)
+    }
+
+    func testAnAudioOnlyDownloadIsOneStream() throws {
+        let parser = ProgressParser(format: .mp3)
+        _ = parser.consume("[download] Destination: /work/download.webm")
+        let reading = try XCTUnwrap(parser.consume("[download]  25.0% of 8.00MiB at 1.00MiB/s ETA 00:06"))
+        XCTAssertEqual(reading.phase, .audio)
+        XCTAssertEqual(try XCTUnwrap(reading.fraction), 0.25, accuracy: 0.001)
+        XCTAssertEqual(parser.consume("[ExtractAudio] Destination: /work/download.mp3")?.phase, .finishing)
+    }
+
+    func testProgressWithoutASizeFallsBackToStreamCounting() throws {
+        let parser = ProgressParser(format: .mp4)
+        _ = parser.consume("[download] Destination: /work/download.f137.mp4")
+        let reading = try XCTUnwrap(parser.consume("[download]  50.0% of Unknown at Unknown B/s ETA Unknown"))
+        XCTAssertEqual(try XCTUnwrap(reading.fraction), 0.25, accuracy: 0.001)
+        XCTAssertNil(reading.bytesPerSecond)
+        XCTAssertNil(reading.secondsLeft)
     }
 
     func testProgressIgnoresOtherLines() {
-        let parser = ProgressParser(expectedStreams: 1)
+        let parser = ProgressParser(format: .mp4)
         XCTAssertNil(parser.consume("[youtube] abc: Downloading webpage"))
         XCTAssertNil(parser.consume("[info] Writing video thumbnail to: /work/thumb.webp"))
+        XCTAssertNil(parser.consume("[download] Sleeping 4.00 seconds as required by the site..."))
         XCTAssertNil(parser.consume(""))
     }
 
-    func testProgressNeverExceedsOne() {
-        let parser = ProgressParser(expectedStreams: 1)
+    func testProgressNeverExceedsOne() throws {
+        let parser = ProgressParser(format: .mp3)
         _ = parser.consume("[download] Destination: a")
         _ = parser.consume("[download] Destination: b")
-        XCTAssertEqual(parser.consume("[download] 100% of 1MiB"), .downloading(1))
+        XCTAssertEqual(try XCTUnwrap(parser.consume("[download] 100% of 1.00MiB")).fraction, 1)
+    }
+
+    func testStatusLinesSayWhatIsHappening() {
+        XCTAssertEqual(
+            DownloadProgress(phase: .video, fraction: 0.45, bytesPerSecond: 3.2e6, secondsLeft: 80).statusLine,
+            "Downloading video \u{00B7} 45% \u{00B7} \(ByteCountFormatter.string(fromByteCount: 3_200_000, countStyle: .file))/s \u{00B7} 1:20 left"
+        )
+        XCTAssertEqual(DownloadProgress(phase: .audio).statusLine, "Downloading audio")
+        XCTAssertEqual(DownloadProgress(phase: .merging).statusLine, "Merging video and audio")
+        XCTAssertEqual(DownloadProgress(phase: .converting, fraction: 0.7).statusLine, "Converting to H.264 \u{00B7} 70%")
+        XCTAssertEqual(DownloadProgress(phase: .converting, fraction: 0.5, secondsLeft: 3725).statusLine,
+                       "Converting to H.264 \u{00B7} 50% \u{00B7} 1:02:05 left")
+    }
+
+    func testConversionProgressIsReadFromFFmpegStatsLines() throws {
+        let line = "frame=  900 fps= 60 q=28.0 size=   10240kB time=00:00:30.00 bitrate=2796.2kbits/s speed=2.5x"
+        let reading = try XCTUnwrap(ConversionProgress.parse(line, duration: 120))
+        XCTAssertEqual(reading.phase, .converting)
+        XCTAssertEqual(try XCTUnwrap(reading.fraction), 0.25, accuracy: 0.001)
+        XCTAssertEqual(reading.secondsLeft, 36)
+        XCTAssertNil(ConversionProgress.parse("Stream mapping:", duration: 120))
+        XCTAssertNil(ConversionProgress.parse(line, duration: nil)?.fraction, "without the video's length there is no percentage")
+    }
+
+    func testClockTimesAreRead() {
+        XCTAssertEqual(ProgressParser.Reading.clock("01:20"), 80)
+        XCTAssertEqual(ProgressParser.Reading.clock("1:02:03"), 3723)
+        XCTAssertNil(ProgressParser.Reading.clock("Unknown"))
+        XCTAssertEqual(ProgressParser.Reading.bytes("~316.00MiB"), 316 * mebibyte)
+        XCTAssertEqual(ProgressParser.Reading.bytes("512.00KiB"), 512 * 1024)
+        XCTAssertNil(ProgressParser.Reading.bytes("Unknown"))
     }
 
     // MARK: - File names

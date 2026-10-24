@@ -26,8 +26,11 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: MediaItem.thumbnailURL(for: file).path))
         XCTAssertEqual(workFolderContents(setup.downloads), [], "the work folder must be emptied")
         XCTAssertEqual(MediaItem.scan(in: setup.downloads).map(\.title), ["Welcome Loop - Sunday"])
-        XCTAssertTrue(progress.values.contains(.downloading(0.25)), "\(progress.values)")
-        XCTAssertEqual(progress.values.last, .finishing)
+        // 50% of a 10 MiB video, with the audio estimated at 5% of it.
+        XCTAssertTrue(progress.values.contains { value in
+            value.phase == .video && abs((value.fraction ?? 0) - 5.0 / 10.5) < 0.01 && value.bytesPerSecond == 1_048_576
+        }, "\(progress.values)")
+        XCTAssertEqual(progress.values.last?.phase, .finishing)
     }
 
     func testVP9VideoIsConvertedWithTheHardwareEncoder() async throws {
@@ -191,12 +194,164 @@ final class DownloadEngineTests: XCTestCase {
         }
     }
 
+    // MARK: - Speed and stalls
+
+    /// A lookup prints about a megabyte of JSON on one line. Reading that one
+    /// byte at a time once stalled for minutes, so no lookup ever finished.
+    func testAMegabyteOfOutputOnOneLineIsReadAtOnce() async throws {
+        let big = #"printf '{"title":"Big","pad":"'; head -c 1500000 /dev/zero | tr '\0' 'a'; printf '","formats":[]}\n'"#
+        let setup = try makeSetup(ytDlpBody: big)
+
+        let start = Date()
+        let fetched = try await setup.engine.fetchInfo(for: url)
+
+        XCTAssertEqual(fetched.title, "Big")
+        XCTAssertLessThan(Date().timeIntervalSince(start), 10)
+    }
+
+    func testStopEndsTheToolsHelperProcessesToo() async throws {
+        // Like yt-dlp, which runs its real work in a child of the program that was launched.
+        let setup = try makeSetup(ytDlpBody: "sleep 31.7 &\nwait")
+        addTeardownBlock { _ = self.run("/usr/bin/pkill", ["-f", "sleep 31.7"]) }
+
+        let task = Task {
+            try await setup.engine.download(
+                url: url, info: nil, format: .mp4, quality: .p1080,
+                into: setup.downloads, progress: { _ in }
+            )
+        }
+        try await Task.sleep(nanoseconds: 800_000_000)
+        XCTAssertTrue(run("/usr/bin/pgrep", ["-f", "sleep 31.7"]), "the helper should be running before Stop")
+
+        task.cancel()
+        _ = try? await task.value
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        XCTAssertFalse(run("/usr/bin/pgrep", ["-f", "sleep 31.7"]), "Stop must end the helper as well")
+    }
+
+    func testALookupThatTakesTooLongGivesUp() async throws {
+        var setup = try makeSetup(ytDlpBody: "exec sleep 30")
+        setup.engine.lookupTimeout = 1
+
+        let start = Date()
+        do {
+            _ = try await setup.engine.fetchInfo(for: url)
+            XCTFail("expected a timeout")
+        } catch {
+            XCTAssertEqual(error as? DownloadError, .lookupTimedOut)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 6)
+    }
+
+    func testLookupUsesTheFastClientAndFallsBackToTheNormalOnes() async throws {
+        let fast = try makeSetup()
+        _ = try await fast.engine.fetchInfo(for: url)
+        XCTAssertEqual(try runs(fast).count, 1)
+        XCTAssertTrue(try runs(fast)[0].contains("player_client=visionos"))
+
+        let refused = try makeSetup(failFastLookup: true)
+        let fetched = try await refused.engine.fetchInfo(for: url)
+        let lines = try runs(refused)
+        XCTAssertEqual(fetched.maxHeight, 2160)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].contains("player_client=visionos"))
+        XCTAssertFalse(lines[1].contains("player_client=visionos"))
+    }
+
+    func testAVideoThatIsPrivateIsNotRetriedWithOtherClients() async throws {
+        let setup = try makeSetup(ytDlpBody: "echo 'ERROR: [youtube] abc: Private video' >&2\nexit 1")
+        do {
+            _ = try await setup.engine.fetchInfo(for: url)
+            XCTFail("expected a failure")
+        } catch {
+            XCTAssertEqual(error as? DownloadError, .privateVideo)
+        }
+        XCTAssertEqual(try runs(setup).count, 1, "asking again another way can't make a private video public")
+    }
+
+    // MARK: - Starting from the lookup
+
+    func testDownloadStartsFromTheSavedLookupInsteadOfAskingAgain() async throws {
+        let setup = try makeSetup()
+        let looked = VideoInfo(title: "Saved", duration: 72, maxHeight: 1080, isLive: false, json: Data("{}".utf8))
+
+        let file = try await setup.engine.download(
+            url: url, info: looked, format: .mp4, quality: .p1080,
+            into: setup.downloads, progress: { _ in }
+        )
+
+        XCTAssertEqual(file.lastPathComponent, "Saved.mp4")
+        let line = try XCTUnwrap(try runs(setup).last)
+        XCTAssertTrue(line.contains("--load-info-json"), line)
+        XCTAssertFalse(line.contains(url.absoluteString), "the link must not be looked up again: \(line)")
+    }
+
+    func testASavedLookupThatFailsIsRetriedFromScratchOnce() async throws {
+        let setup = try makeSetup(failSavedLookup: true)
+        let looked = VideoInfo(title: "Saved", duration: 72, maxHeight: 1080, isLive: false, json: Data("{}".utf8))
+
+        let file = try await setup.engine.download(
+            url: url, info: looked, format: .mp4, quality: .p1080,
+            into: setup.downloads, progress: { _ in }
+        )
+
+        XCTAssertEqual(file.lastPathComponent, "Saved.mp4")
+        let lines = try runs(setup)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].contains("--load-info-json"))
+        XCTAssertFalse(lines[1].contains("--load-info-json"))
+        XCTAssertTrue(lines[1].contains(url.absoluteString))
+    }
+
+    func testAnOldSavedLookupIsNotReused() async throws {
+        let setup = try makeSetup()
+        let stale = VideoInfo(
+            title: "Old", duration: 72, maxHeight: 1080, isLive: false,
+            json: Data("{}".utf8), fetchedAt: Date(timeIntervalSinceNow: -3 * 3600)
+        )
+
+        _ = try await setup.engine.download(
+            url: url, info: stale, format: .mp4, quality: .p1080,
+            into: setup.downloads, progress: { _ in }
+        )
+
+        XCTAssertFalse(try XCTUnwrap(try runs(setup).last).contains("--load-info-json"))
+    }
+
+    func testWithoutALookupTheDownloadNamesTheFileItself() async throws {
+        let setup = try makeSetup()
+
+        let file = try await setup.engine.download(
+            url: url, info: nil, format: .mp4, quality: .p1080,
+            into: setup.downloads, progress: { _ in }
+        )
+
+        XCTAssertEqual(file.lastPathComponent, "Their Own Title.mp4")
+    }
+
+    func testConversionReportsHowFarItIs() async throws {
+        let setup = try makeSetup(video: "vp9", audio: "opus")
+        let progress = Progress()
+
+        _ = try await setup.engine.download(
+            url: url, info: info, format: .mp4, quality: .p2160,
+            into: setup.downloads, progress: { progress.add($0) }
+        )
+
+        // 30 s of a 72 s video, at 2x speed.
+        let converting = progress.values.filter { $0.phase == .converting }
+        XCTAssertTrue(converting.contains { abs(($0.fraction ?? 0) - 30.0 / 72.0) < 0.01 && $0.secondsLeft == 21 }, "\(converting)")
+    }
+
     // MARK: - Setup
 
     private struct Setup {
         var engine: DownloadEngine
         let downloads: URL
         let ffmpegLog: URL
+        /// One line per yt-dlp run: its arguments.
+        let ytDlpLog: URL
     }
 
     /// A stand-in `yt-dlp` that behaves like a successful one unless `ytDlpBody`
@@ -205,14 +360,25 @@ final class DownloadEngineTests: XCTestCase {
         video: String = "h264",
         audio: String = "aac",
         failEncoder: String? = nil,
+        failFastLookup: Bool = false,
+        failSavedLookup: Bool = false,
         ytDlpBody: String? = nil
     ) throws -> Setup {
         let root = try makeTemporaryDirectory()
         let toolsDirectory = root.appendingPathComponent("Tools", isDirectory: true)
         try FileManager.default.createDirectory(at: toolsDirectory, withIntermediateDirectories: true)
         let log = root.appendingPathComponent("ffmpeg.log")
+        let ytDlpLog = root.appendingPathComponent("yt-dlp.log")
 
-        let ytDlp = ytDlpBody ?? """
+        let fastFailure = failFastLookup
+            ? #"case "$*" in *player_client=visionos*) echo "ERROR: something odd happened" >&2; exit 1 ;; esac"#
+            : ""
+        let savedFailure = failSavedLookup
+            ? #"case "$*" in *--load-info-json*) echo "ERROR: unable to download video data: HTTP Error 403: Forbidden" >&2; exit 1 ;; esac"#
+            : ""
+        let ytDlp = "echo \"$@\" >> \"\(ytDlpLog.path)\"\n" + (ytDlpBody ?? """
+        \(fastFailure)
+        \(savedFailure)
         for a in "$@"; do
           if [ "$a" = "--dump-single-json" ]; then
             echo '{"title":"Welcome Loop: Sunday","duration":72,"is_live":false,"formats":[{"vcodec":"none","height":null},{"vcodec":"avc1","height":1080},{"vcodec":"vp09","height":2160}]}'
@@ -233,13 +399,14 @@ final class DownloadEngineTests: XCTestCase {
         echo "[download] Destination: $media"
         echo "[download]  50.0% of 10.00MiB at 1.00MiB/s"
         echo "[download] 100% of 10.00MiB"
+        named() { printf '%s' "$1" | sed -e 's/%(title).120B/Their Own Title/' -e "s/%(ext)s/$2/"; }
         if [ $audio = 1 ]; then
-          printf mp3 > "$(printf '%s' "$media" | sed 's/%(ext)s/mp3/')"
+          printf mp3 > "$(named "$media" mp3)"
         else
-          printf mp4 > "$(printf '%s' "$media" | sed 's/%(ext)s/mp4/')"
+          printf mp4 > "$(named "$media" mp4)"
         fi
         printf jpg > "$(printf '%s' "$thumb" | sed 's/%(ext)s/jpg/')"
-        """
+        """)
 
         let failure = failEncoder.map { "case \"$*\" in *\($0)*) exit 1 ;; esac" } ?? ""
         let ffmpeg = """
@@ -252,6 +419,7 @@ final class DownloadEngineTests: XCTestCase {
         fi
         echo "$@" >> "\(log.path)"
         \(failure)
+        echo "frame=1 fps=2 q=1 size=1kB time=00:00:30.00 bitrate=1kbits/s speed=2.0x" >&2
         printf converted > "${@: -1}"
         """
 
@@ -265,8 +433,26 @@ final class DownloadEngineTests: XCTestCase {
         return Setup(
             engine: DownloadEngine(tools: tools),
             downloads: root.appendingPathComponent("Downloads", isDirectory: true),
-            ffmpegLog: log
+            ffmpegLog: log,
+            ytDlpLog: ytDlpLog
         )
+    }
+
+    /// The arguments of each yt-dlp run, in order.
+    private func runs(_ setup: Setup) throws -> [String] {
+        try String(contentsOf: setup.ytDlpLog).split(separator: "\n").map(String.init)
+    }
+
+    /// Runs a program and says whether it exited successfully.
+    private func run(_ path: String, _ arguments: [String]) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 
     private func writeTool(_ name: String, body: String, in directory: URL) throws {

@@ -5,9 +5,7 @@ import Foundation
 public struct DownloadItem: Identifiable, Equatable, Sendable {
     public enum Status: Equatable, Sendable {
         case queued
-        /// Fraction of the whole download, 0 to 1.
-        case downloading(Double)
-        case finishing
+        case downloading(DownloadProgress)
         case done(URL)
         case failed(String)
     }
@@ -20,11 +18,13 @@ public struct DownloadItem: Identifiable, Equatable, Sendable {
     public let quality: DownloadQuality
     public var title: String
     public var status: Status = .queued
+    /// Whether trying again could plausibly work, so the list offers Retry.
+    public var canRetry = false
 
     /// Queued or in progress: shown as a card in the bin until it is a file.
     public var isActive: Bool {
         switch status {
-        case .queued, .downloading, .finishing: true
+        case .queued, .downloading: true
         case .done, .failed: false
         }
     }
@@ -32,6 +32,22 @@ public struct DownloadItem: Identifiable, Equatable, Sendable {
     /// For example "MP4 · 1080p" or "MP3".
     public var detail: String {
         format == .mp4 ? "MP4 \u{00B7} \(quality.title)" : "MP3"
+    }
+
+    /// What the card says it is doing.
+    public var statusLine: String {
+        switch status {
+        case .queued: "Waiting"
+        case .downloading(let progress): progress.statusLine
+        case .done: "Saved to the bin"
+        case .failed(let reason): reason
+        }
+    }
+
+    /// How far along the bar is, or nil when that isn't known.
+    public var fraction: Double? {
+        if case .downloading(let progress) = status { return progress.fraction }
+        return nil
     }
 }
 
@@ -50,9 +66,11 @@ public enum LinkLookup: Equatable, Sendable {
 @MainActor
 public final class DownloadQueue: ObservableObject {
     public typealias LookUp = @Sendable (URL) async throws -> VideoInfo
+    /// `info` is nil when the link's lookup failed or timed out; the download
+    /// then works out the title itself.
     public typealias Fetch = @Sendable (
         _ url: URL,
-        _ info: VideoInfo,
+        _ info: VideoInfo?,
         _ format: DownloadFormat,
         _ quality: DownloadQuality,
         _ directory: URL,
@@ -83,6 +101,9 @@ public final class DownloadQueue: ObservableObject {
     /// Called whenever a download finishes, so the bin can show the new file.
     public var onBinChanged: @MainActor () -> Void = {}
 
+    /// How many links are looked up at the same time.
+    static let simultaneousLookups = 3
+
     private enum Keys {
         static let format = "downloadFormat"
         static let quality = "downloadQuality"
@@ -93,7 +114,7 @@ public final class DownloadQueue: ObservableObject {
     private let lookUp: LookUp
     private let fetch: Fetch
     private var runTask: Task<Void, Never>?
-    private var lookupTask: Task<Void, Never>?
+    private var runningLookups: Set<String> = []
 
     init(
         availability: DownloadAvailability,
@@ -119,7 +140,7 @@ public final class DownloadQueue: ObservableObject {
     ) {
         let directory = BinStorage.downloadsDirectory(besideBin: BinStorage.rootURL)
         if case .available(let tools) = availability {
-            let engine = DownloadEngine(tools: tools)
+            let engine = DownloadEngine(tools: tools, log: .shared)
             self.init(
                 availability: availability,
                 defaults: defaults,
@@ -162,36 +183,37 @@ public final class DownloadQueue: ObservableObject {
         quality.isOffered(by: pastedInfos)
     }
 
-    /// Looks up each new link, one at a time, so a long paste doesn't open a
-    /// dozen connections at once.
+    /// Looks up each new link, a few at a time. Download doesn't wait for this:
+    /// a link that hasn't been looked up yet simply downloads without it.
     private func lookUpNewLinks() {
         guard availability.error == nil else { return }
         for link in downloadableLinks where lookups[link.id] == nil {
             lookups[link.id] = .looking
         }
-        guard lookupTask == nil else { return }
-        lookupTask = Task { [weak self] in
-            while let self, let next = self.nextLinkToLookUp() {
-                guard let url = next.url else {
-                    self.lookups[next.id] = .failed("That isn\u{2019}t a web link.")
-                    continue
-                }
+        startLookups()
+    }
+
+    private func startLookups() {
+        while runningLookups.count < DownloadQueue.simultaneousLookups,
+              let link = downloadableLinks.first(where: { lookups[$0.id] == .looking && !runningLookups.contains($0.id) }),
+              let url = link.url {
+            runningLookups.insert(link.id)
+            let id = link.id
+            Task { [weak self] in
                 let result: LinkLookup
                 do {
-                    result = .found(try await self.lookUp(url))
+                    guard let lookUp = self?.lookUp else { return }
+                    result = .found(try await lookUp(url))
                 } catch is CancellationError {
-                    break
+                    result = .failed(DownloadError.timedOut.localizedDescription)
                 } catch {
                     result = .failed(error.localizedDescription)
                 }
-                self.lookups[next.id] = result
+                self?.lookups[id] = result
+                self?.runningLookups.remove(id)
+                self?.startLookups()
             }
-            self?.lookupTask = nil
         }
-    }
-
-    private func nextLinkToLookUp() -> DownloadLink? {
-        downloadableLinks.first { lookups[$0.id] == .looking }
     }
 
     // MARK: - Downloading
@@ -210,28 +232,27 @@ public final class DownloadQueue: ObservableObject {
         guard !chosen.isEmpty else { return }
         message = nil
 
-        let known = lookups
         let format = self.format
         let quality = self.quality
         let queued = chosen.compactMap { link -> DownloadItem? in
             guard let url = link.url else { return nil }
             var title = link.text
-            if case .found(let info)? = known[link.id] { title = info.title }
+            if case .found(let info)? = lookups[link.id] { title = info.title }
             return DownloadItem(linkID: link.id, url: url, format: format, quality: quality, title: title)
         }
         items.append(contentsOf: queued)
         linkText = ""
-        isDownloading = true
+        start(queued.map(\.id))
+    }
 
-        let ids = queued.map(\.id)
-        let directory = downloadsDirectory
-        runTask = Task { [weak self] in
-            for id in ids {
-                guard let self, !Task.isCancelled else { break }
-                await self.run(id, known: known, directory: directory)
-            }
-            self?.finishRun()
+    /// Tries a failed download again.
+    public func retry(_ id: UUID) {
+        guard !isDownloading, let item = items.first(where: { $0.id == id }), case .failed = item.status else { return }
+        update(id) {
+            $0.status = .queued
+            $0.canRetry = false
         }
+        start([id])
     }
 
     /// Stops the download in progress and drops everything still waiting.
@@ -246,17 +267,26 @@ public final class DownloadQueue: ObservableObject {
         items.removeAll { !$0.isActive }
     }
 
-    private func run(_ id: UUID, known: [String: LinkLookup], directory: URL) async {
-        guard let item = items.first(where: { $0.id == id }) else { return }
-        update(id) { $0.status = .downloading(0) }
-        do {
-            let info: VideoInfo
-            if case .found(let cached)? = known[item.linkID] {
-                info = cached
-            } else {
-                info = try await lookUp(item.url)
+    private func start(_ ids: [UUID]) {
+        isDownloading = true
+        let directory = downloadsDirectory
+        runTask = Task { [weak self] in
+            for id in ids {
+                guard let self, !Task.isCancelled else { break }
+                await self.run(id, directory: directory)
             }
-            update(id) { $0.title = info.title }
+            self?.finishRun()
+        }
+    }
+
+    private func run(_ id: UUID, directory: URL) async {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        update(id) { $0.status = .downloading(DownloadProgress(phase: item.format == .mp4 ? .video : .audio)) }
+        do {
+            // Pressing Download soon after pasting: give a lookup that is
+            // nearly done a moment, since its results make the download faster.
+            let info = await lookupResult(for: item.linkID)
+            if let info { update(id) { $0.title = info.title } }
             let file = try await fetch(item.url, info, item.format, item.quality, directory) { [weak self] progress in
                 Task { @MainActor in self?.apply(progress, to: id) }
             }
@@ -265,22 +295,33 @@ public final class DownloadQueue: ObservableObject {
         } catch is CancellationError {
             // Stop already dropped the item.
         } catch {
-            update(id) { $0.status = .failed(error.localizedDescription) }
+            let retryable = (error as? DownloadError)?.isRetryable ?? false
+            update(id) {
+                $0.status = .failed(error.localizedDescription)
+                $0.canRetry = retryable
+            }
         }
+    }
+
+    /// The lookup's results for a link, waiting while it is still running, or
+    /// nil if it failed or never started.
+    private func lookupResult(for linkID: String) async -> VideoInfo? {
+        let deadline = Date().addingTimeInterval(50)
+        while lookups[linkID] == .looking, Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        if case .found(let info)? = lookups[linkID] { return info }
+        return nil
     }
 
     /// Progress arrives from a background task, possibly late, so it only ever
     /// moves an item forward and never revives one that has finished or gone.
     private func apply(_ progress: DownloadProgress, to id: UUID) {
         update(id) { item in
-            switch (item.status, progress) {
-            case (.downloading(let current), .downloading(let value)):
-                item.status = .downloading(max(current, value))
-            case (.downloading, .finishing):
-                item.status = .finishing
-            default:
-                break
-            }
+            guard case .downloading(let current) = item.status else { return }
+            if progress.phase < current.phase { return }
+            if progress.phase == current.phase, let new = progress.fraction, let old = current.fraction, new < old { return }
+            item.status = .downloading(progress)
         }
     }
 
