@@ -53,7 +53,7 @@ final class DownloadsBinTests: XCTestCase {
         try Data([0xFF]).write(to: thumbnail)
 
         let byTitle = Dictionary(uniqueKeysWithValues: MediaItem.scan(in: folder).map { ($0.title, $0) })
-        XCTAssertEqual(byTitle["With Art"]?.thumbnailURL, thumbnail)
+        XCTAssertEqual(byTitle["With Art"]?.thumbnailURL?.resolvingSymlinksInPath(), thumbnail.resolvingSymlinksInPath())
         XCTAssertNil(byTitle["No Art"]?.thumbnailURL)
     }
 
@@ -91,7 +91,7 @@ final class DownloadsBinTests: XCTestCase {
 
         for mode in DragMode.allCases {
             queue.dragMode = mode
-            XCTAssertEqual(queue.dragPayload(for: item), file)
+            XCTAssertEqual(queue.dragPayload(for: item)?.resolvingSymlinksInPath(), file.resolvingSymlinksInPath())
         }
 
         try FileManager.default.removeItem(at: file)
@@ -140,6 +140,10 @@ final class DownloadsBinTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    // NSTemporaryDirectory() is /var/... but a directory listing comes back as
+    // /private/var/..., so URLs for the same file are compared with symlinks
+    // resolved.
 
     private func makeQueue(root: URL) -> ConversionQueue {
         ConversionQueue(
