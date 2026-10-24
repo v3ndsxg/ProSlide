@@ -8,6 +8,7 @@
 #   ./Scripts/make-app-bundle.sh --install       # release build, then copy to /Applications
 #   ./Scripts/make-app-bundle.sh --stable        # build the production app (ProSlide)
 #   ./Scripts/make-app-bundle.sh --beta          # build the beta app (ProSlide Beta)
+#   ./Scripts/make-app-bundle.sh --no-tools      # skip the download tools (yt-dlp, ffmpeg, Deno)
 #
 # The beta is a separate app: its own name, bundle ID, icon and Documents folder,
 # so it installs beside the production app and never touches its decks. This
@@ -24,13 +25,14 @@ BUILD_NUMBER="1"
 VARIANT="${PROSLIDE_VARIANT:-beta}"
 
 usage() {
-    sed -n '2,13p' "${BASH_SOURCE[0]}" | cut -c 3-
+    sed -n '2,14p' "${BASH_SOURCE[0]}" | cut -c 3-
 }
 
 die() { echo "error: $*" >&2; exit 1; }
 
 CONFIG="release"
 INSTALL=0
+WITH_TOOLS=1
 for arg in "$@"; do
     case "$arg" in
         release|Release)  CONFIG="release" ;;
@@ -38,6 +40,7 @@ for arg in "$@"; do
         --install|-i)     INSTALL=1 ;;
         --beta)           VARIANT="beta" ;;
         --stable)         VARIANT="stable" ;;
+        --no-tools)       WITH_TOOLS=0 ;;
         -h|--help)        usage; exit 0 ;;
         -*)               die "unknown option '$arg' (try --help)" ;;
         *)                die "unexpected argument '$arg' (config must come first, e.g. '$arg --install')" ;;
@@ -78,6 +81,16 @@ EXECUTABLE="$BIN_DIR/ProSlide"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$EXECUTABLE" "$APP/Contents/MacOS/ProSlide"
+
+# The Downloader's tools, pinned by checksum in Scripts/tools.lock. They are
+# fetched on this Mac and never committed. Their own signatures are left alone:
+# yt-dlp is ad-hoc signed upstream, and re-signing a PyInstaller program can
+# corrupt it. The app seal below covers them as resources.
+if [ "$WITH_TOOLS" -eq 1 ] && [ -f "$ROOT/Scripts/tools.lock" ]; then
+    echo "Fetching the download tools (pinned in Scripts/tools.lock)…"
+    "$ROOT/Scripts/fetch-tools.sh" "$APP/Contents/Resources/Tools"
+    cp "$ROOT/Scripts/THIRD_PARTY_NOTICES.txt" "$APP/Contents/Resources/Tools/"
+fi
 
 # The icon comes from the same 1024px PNG the asset catalog uses. iconutil and
 # sips ship with macOS, so this needs no Xcode. A failure here is cosmetic --

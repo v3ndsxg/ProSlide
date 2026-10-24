@@ -62,6 +62,10 @@ jobs:
             test "$(plist CFBundleIdentifier)" = "$id" || { echo "$name: wrong bundle id"; exit 1; }
             test "$(plist ProSlideDataFolder)" = "$folder" || { echo "$name: wrong data folder"; exit 1; }
             test "$(plist ProSlideIsBeta)" = "$beta" || { echo "$name: wrong beta flag"; exit 1; }
+            for tool in yt-dlp ffmpeg deno; do
+              test -x "$APP/Contents/Resources/Tools/$tool" || { echo "$name: missing tool $tool"; exit 1; }
+            done
+            test -f "$APP/Contents/Resources/Tools/THIRD_PARTY_NOTICES.txt" || { echo "$name: missing notices"; exit 1; }
             codesign --verify "$APP"
             codesign -dv "$APP" 2>&1 | sed -n '1,4p'
             du -sh "$APP"
@@ -75,6 +79,42 @@ jobs:
           # The two builds must be able to sit side by side.
           test -d "build/ProSlide Beta.app" || { echo "beta bundle missing after the stable build"; exit 1; }
 
+      - name: Run the packaged download tools
+        # Runs each tool from inside the packaged app, so a signing or
+        # quarantine problem shows up here rather than on a Mac. Nothing here
+        # touches the internet; the tools only look at files and run code locally.
+        shell: bash
+        run: |
+          TOOLS="$PWD/build/ProSlide Beta.app/Contents/Resources/Tools"
+
+          pinned() { awk -v n="$1" '$1 == n { print $2 }' Scripts/tools.lock; }
+          got="$("$TOOLS/yt-dlp" --version)"
+          echo "yt-dlp $got"
+          test "$got" = "$(pinned yt-dlp)" || { echo "yt-dlp is not the pinned version"; exit 1; }
+
+          ffmpeg_version="$("$TOOLS/ffmpeg" -hide_banner -version)"
+          echo "${ffmpeg_version%%$'\n'*}"
+          deno_version="$("$TOOLS/deno" --version)"
+          echo "${deno_version%%$'\n'*}"
+          test "$("$TOOLS/deno" eval 'console.log(6 * 7)')" = 42 || { echo "deno could not run code"; exit 1; }
+
+          encoders="$("$TOOLS/ffmpeg" -hide_banner -encoders)"
+          for encoder in libx264 libmp3lame libvpx-vp9 libopus; do
+            grep -q "$encoder" <<<"$encoders" || { echo "ffmpeg lacks $encoder"; exit 1; }
+          done
+          # The Mac's own H.264 encoder is what 4K conversion prefers. A runner
+          # may not offer it, which is why the engine can fall back to libx264.
+          if grep -q h264_videotoolbox <<<"$encoders"; then
+            if "$TOOLS/ffmpeg" -hide_banner -loglevel error -y -f lavfi -i testsrc=duration=1:size=320x240:rate=15 \
+                 -c:v h264_videotoolbox -b:v 2M "$RUNNER_TEMP/vt.mp4"; then
+              echo "h264_videotoolbox works on this runner"
+            else
+              echo "::warning title=Hardware encoder unavailable::h264_videotoolbox is listed but would not encode on this runner; 4K conversion would use libx264 here."
+            fi
+          else
+            echo "::warning title=Hardware encoder missing::This ffmpeg has no h264_videotoolbox."
+          fi
+
       - name: Test
         # `shell: bash` implies -eo pipefail. Without it the pipeline's exit
         # status is tee's (always 0), so a test target that fails to compile
@@ -87,6 +127,8 @@ jobs:
         shell: bash
         env:
           FILE_CONVERTER_ARTIFACTS: ${{ runner.temp }}/test-artifacts
+          # Lets RealToolsTests run the engine against the packaged tools.
+          PROSLIDE_TOOLS_DIR: ${{ github.workspace }}/build/ProSlide Beta.app/Contents/Resources/Tools
         run: |
           mkdir -p "$FILE_CONVERTER_ARTIFACTS"
           swift test 2>&1 | tee "$FILE_CONVERTER_ARTIFACTS/test-output.txt"
