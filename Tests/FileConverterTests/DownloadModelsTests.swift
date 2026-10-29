@@ -19,7 +19,10 @@ final class DownloadModelsTests: XCTestCase {
     }
 
     func testOnlyWebLinksAreAccepted() {
-        for text in ["hello", "ftp://example.com/video.mp4", "file:///etc/passwd", "-o", "javascript:alert(1)"] {
+        for text in [
+            "hello", "ftp://example.com/video.mp4", "file:///etc/passwd", "-o", "--exec=x",
+            "javascript:alert(1)", "someone@example.com", ".hidden", "example.",
+        ] {
             let link = DownloadLink.classify(text)
             XCTAssertFalse(link.isDownloadable, text)
             XCTAssertNil(link.url, text)
@@ -58,6 +61,48 @@ final class DownloadModelsTests: XCTestCase {
         ] {
             XCTAssertTrue(DownloadLink.classify(text).isDownloadable, text)
         }
+    }
+
+    func testALinkPastedWithoutHTTPSIsGivenIt() {
+        for (text, expected) in [
+            ("vimeo.com/76979871", "https://vimeo.com/76979871"),
+            ("www.tiktok.com/@someone/video/123", "https://www.tiktok.com/@someone/video/123"),
+            ("youtu.be/dQw4w9WgXcQ", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            ("http://vimeo.com/76979871", "http://vimeo.com/76979871"),
+        ] {
+            let link = DownloadLink.classify(text)
+            XCTAssertTrue(link.isDownloadable, text)
+            XCTAssertEqual(link.url?.absoluteString, expected, text)
+            XCTAssertEqual(link.text, text, "the row shows what was pasted")
+        }
+    }
+
+    func testYouTubeLinksInEveryFormBecomeThePlainVideoLink() {
+        let forms = [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com/watch?v=dQw4w9WgXcQ&list=PL123&index=4&t=42s",
+            "https://m.youtube.com/watch?app=desktop&v=dQw4w9WgXcQ",
+            "https://music.youtube.com/watch?v=dQw4w9WgXcQ&si=abc",
+            "https://youtu.be/dQw4w9WgXcQ?si=tracking&t=10",
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ?feature=share",
+            "https://www.youtube.com/live/dQw4w9WgXcQ",
+            "https://www.youtube.com/embed/dQw4w9WgXcQ",
+            "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+            "youtube.com/shorts/dQw4w9WgXcQ",
+        ]
+        for text in forms {
+            let link = DownloadLink.classify(text)
+            XCTAssertTrue(link.isDownloadable, text)
+            XCTAssertEqual(link.url?.absoluteString, "https://www.youtube.com/watch?v=dQw4w9WgXcQ", text)
+        }
+
+        let links = DownloadLink.parse(forms.joined(separator: "\n"))
+        XCTAssertEqual(links.map(\.text), [forms[0]], "one video pasted in many forms is one link")
+    }
+
+    func testAYouTubeLinkWithAnOddIdIsLeftAsItWas() {
+        let text = "https://www.youtube.com/watch?v=abc&list=PL123"
+        XCTAssertEqual(DownloadLink.classify(text).url?.absoluteString, text, "yt-dlp decides what it means")
     }
 
     // MARK: - Video details
@@ -409,7 +454,7 @@ final class DownloadModelsTests: XCTestCase {
     func testToolOutputIsTurnedIntoAReasonAPersonCanActOn() {
         let cases: [(String, DownloadError)] = [
             ("ERROR: [instagram] x: Login required", .loginRequired),
-            ("ERROR: [youtube] x: Sign in to confirm you\u{2019}re not a bot", .loginRequired),
+            ("ERROR: [youtube] x: Sign in to confirm you\u{2019}re not a bot. Use --cookies-from-browser", .botCheck),
             ("ERROR: [youtube] x: Sign in to confirm your age", .ageRestricted),
             ("ERROR: [youtube] x: Private video", .privateVideo),
             ("ERROR: [youtube] x: Video unavailable", .unavailable),
@@ -424,5 +469,28 @@ final class DownloadModelsTests: XCTestCase {
             DownloadError.fromToolOutput(["ERROR: something new broke"]),
             .toolFailed("ERROR: something new broke")
         )
+    }
+
+    func testWarningsDontDecideWhatWentWrong() {
+        let lines = [
+            "WARNING: [youtube] x: Some formats may be missing. Sign in or use --cookies for the authentication",
+            "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+            "[download] Got error: timed out",
+        ]
+        XCTAssertEqual(
+            DownloadError.fromToolOutput(lines),
+            .toolFailed("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        )
+        XCTAssertEqual(DownloadError.fromToolOutput(["[youtube] x: Video unavailable"]), .unavailable,
+                       "with no ERROR line every line is read")
+    }
+
+    func testOnlyALinkNoClientCanDownloadSkipsTheNormalLookup() {
+        for error: DownloadError in [.unavailable, .privateVideo, .loginRequired, .botCheck, .network, .lookupTimedOut, .toolFailed("x")] {
+            XCTAssertTrue(error.worthRetryingLookup, "\(error)")
+        }
+        for error: DownloadError in [.liveNotSupported, .playlistNotSupported, .unsupportedSite] {
+            XCTAssertFalse(error.worthRetryingLookup, "\(error)")
+        }
     }
 }

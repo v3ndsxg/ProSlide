@@ -6,7 +6,6 @@ import SwiftUI
 /// Finished files, and the downloads still running, appear in the bin.
 struct DownloaderView: View {
     @EnvironmentObject private var downloads: DownloadQueue
-    @State private var cardHeight: CGFloat = 60
 
     var body: some View {
         VStack(spacing: 16) {
@@ -26,7 +25,10 @@ struct DownloaderView: View {
                 Label(message, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red).frame(maxWidth: 560)
             }
-            Spacer(minLength: 0)
+            // The link card fills the room itself; without it, keep the footer at the bottom.
+            if downloads.availability.error != nil {
+                Spacer(minLength: 0)
+            }
             footer
         }
         .padding(28)
@@ -37,15 +39,16 @@ struct DownloaderView: View {
 
     /// One card: where links are pasted, then a row for each pasted link and for
     /// each download, with the site's badge, its title and what it is doing.
+    ///
+    /// It fills the room down to the options, so pasted links are easy to read,
+    /// and scrolls only once what it holds is taller than that.
     private var linkCard: some View {
-        ScrollView(showsIndicators: false) {
+        ScrollView {
             VStack(spacing: 0) {
                 entry
-                if !downloads.links.isEmpty {
-                    ForEach(downloads.links) { link in
-                        Divider()
-                        linkRow(link)
-                    }
+                ForEach(downloads.links) { link in
+                    Divider()
+                    linkRow(link)
                 }
                 if !downloads.items.isEmpty {
                     Divider()
@@ -61,27 +64,19 @@ struct DownloaderView: View {
                             .disabled(downloads.isDownloading)
                     }
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 5)
                     ForEach(downloads.items) { item in
                         Divider()
                         itemRow(item)
                     }
                 }
             }
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
-            .padding(.horizontal, 2)
-            .padding(.vertical, 4)
-            .background(GeometryReader { proxy in
-                Color.clear.preference(key: CardHeightKey.self, value: proxy.size.height)
-            })
         }
-        .onPreferenceChange(CardHeightKey.self) { cardHeight = $0 }
-        // A scroll view takes all the room it is offered. This sizes it to the
-        // card, up to a limit, so the options stay right under it.
-        .frame(maxWidth: 620)
-        .frame(height: min(cardHeight, 340))
+        .frame(maxWidth: 620, minHeight: 180, maxHeight: .infinity)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
         .contextMenu {
             Button("Show Download Log") { showLog() }
         }
@@ -96,11 +91,12 @@ struct DownloaderView: View {
                 .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $downloads.linkText)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(.system(size: Self.entryFontSize))
                     .scrollContentBackground(.hidden)
                     .frame(height: entryHeight)
                 if downloads.linkText.isEmpty {
                     Text("Paste a video link, or several, one per line\u{2026}")
+                        .font(.system(size: Self.entryFontSize))
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
                         .padding(.top, 5)
@@ -110,13 +106,17 @@ struct DownloaderView: View {
             Button("Paste") { paste() }
                 .buttonStyle(.borderedProminent)
         }
-        .padding(12)
+        .padding(14)
     }
 
-    /// One line when empty, growing with what is pasted up to a few lines.
+    private static let entryFontSize: CGFloat = 14
+    private static let entryLineHeight: CGFloat = 19
+
+    /// Room for four lines to start, growing with what is pasted up to eight;
+    /// past that the box scrolls on its own.
     private var entryHeight: CGFloat {
-        let lines = max(downloads.linkText.split(separator: "\n", omittingEmptySubsequences: false).count, 1)
-        return min(max(CGFloat(lines) * 18 + 10, 30), 100)
+        let lines = downloads.linkText.split(separator: "\n", omittingEmptySubsequences: false).count
+        return CGFloat(min(max(lines, 4), 8)) * Self.entryLineHeight + 10
     }
 
     private func paste() {
@@ -211,7 +211,7 @@ struct DownloaderView: View {
     private func itemRow(_ item: DownloadItem) -> some View {
         HStack(spacing: 11) {
             SiteBadgeView(badge: SiteBadge.forHost(item.url.host))
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1).truncationMode(.middle)
@@ -232,7 +232,7 @@ struct DownloaderView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.vertical, 6)
     }
 
     private func statusColor(_ item: DownloadItem) -> Color {
@@ -305,10 +305,4 @@ struct DownloaderView: View {
             ? String(format: "%d:%02d:%02d", hours, minutes, secs)
             : String(format: "%d:%02d", minutes, secs)
     }
-}
-
-/// The height of the link card's content, so its scroll view can match it.
-private struct CardHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 60
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
