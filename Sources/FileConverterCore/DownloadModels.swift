@@ -195,6 +195,7 @@ public enum DownloadError: Error, Equatable, LocalizedError {
     case playlistNotSupported
     case liveNotSupported
     case loginRequired
+    case botCheck
     case ageRestricted
     case privateVideo
     case unavailable
@@ -219,6 +220,8 @@ public enum DownloadError: Error, Equatable, LocalizedError {
             "Live streams can\u{2019}t be downloaded."
         case .loginRequired:
             "This video needs a login, so it can\u{2019}t be downloaded."
+        case .botCheck:
+            "YouTube asked to confirm this isn\u{2019}t a bot. Wait a few minutes and try again."
         case .ageRestricted:
             "This video is age-restricted and needs a login, so it can\u{2019}t be downloaded."
         case .privateVideo:
@@ -248,37 +251,46 @@ public enum DownloadError: Error, Equatable, LocalizedError {
     /// offers a Retry button.
     public var isRetryable: Bool {
         switch self {
-        case .timedOut, .network, .toolFailed, .noOutput, .lookupTimedOut: true
+        case .timedOut, .network, .botCheck, .toolFailed, .noOutput, .lookupTimedOut: true
         default: false
         }
     }
 
-    /// A failed fast lookup is worth repeating with YouTube's normal clients
-    /// when the fast one may simply have been refused. A video that is private
-    /// or gone is the same whichever way it is asked.
+    /// A failed fast lookup is worth repeating with YouTube's normal clients.
+    /// The fast client is turned away for some videos that are fine, and what it
+    /// says then ("unavailable", "sign in") can't be told apart from the real
+    /// thing. Only a link no client can download is not asked again.
     var worthRetryingLookup: Bool {
         switch self {
-        case .toolFailed, .badMetadata, .loginRequired, .ageRestricted: true
-        default: false
+        case .liveNotSupported, .playlistNotSupported, .unsupportedSite, .toolsMissing, .unsupportedHardware: false
+        default: true
         }
     }
 
     /// A download from saved lookup results that failed, and might work from a
-    /// fresh lookup instead.
+    /// fresh lookup instead: the saved addresses can be refused or throttled, or
+    /// have come from a client that was turned away.
     var worthRetryingFresh: Bool {
         switch self {
-        case .toolFailed, .network, .noOutput: true
+        case .toolFailed, .network, .noOutput, .timedOut, .unavailable, .loginRequired, .botCheck: true
         default: false
         }
     }
 
     /// Turns the tail of yt-dlp's output into the reason a person can act on.
+    ///
+    /// Only the `ERROR:` lines are read when there are any. Warnings often
+    /// mention signing in or `--cookies` without anything being wrong, and
+    /// reading them turned working links into "needs a login".
     static func fromToolOutput(_ lines: [String]) -> DownloadError {
-        let text = lines.joined(separator: "\n").lowercased()
+        let errors = lines.filter { $0.contains("ERROR:") }
+        let relevant = errors.isEmpty ? lines : errors
+        let text = relevant.joined(separator: "\n").lowercased()
         func has(_ needles: String...) -> Bool { needles.contains { text.contains($0) } }
 
         if has("confirm your age", "age-restricted", "age restricted") { return .ageRestricted }
         if has("private video") { return .privateVideo }
+        if has("not a bot") { return .botCheck }
         if has("sign in", "log in", "login", "requires authentication", "--cookies") { return .loginRequired }
         if has("available in your country", "blocked it in your country", "geo restrict", "geo-restrict") { return .geoBlocked }
         if has("video unavailable", "has been removed", "no longer available", "does not exist") { return .unavailable }
@@ -286,7 +298,7 @@ public enum DownloadError: Error, Equatable, LocalizedError {
         if has("unable to download webpage", "name or service not known", "timed out",
                "network is unreachable", "http error 429", "nodename nor servname") { return .network }
 
-        let detail = lines.last(where: { $0.lowercased().contains("error") }) ?? lines.last ?? ""
+        let detail = errors.last ?? lines.last(where: { $0.lowercased().contains("error") }) ?? lines.last ?? ""
         return .toolFailed(detail)
     }
 }

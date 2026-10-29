@@ -13,18 +13,22 @@ public struct DownloadEngine: Sendable {
 
     /// How long a download may go without a line of output before it is stopped.
     public var idleTimeout: TimeInterval
-    /// How long looking a link up may take, all attempts included.
+    /// How long the quick first attempt at looking a link up may take.
+    public var quickLookupTimeout: TimeInterval
+    /// How long the normal attempt may take, on top of the quick one.
     public var lookupTimeout: TimeInterval
     public var log: DownloadLog?
 
     public init(
         tools: DownloadTools,
         idleTimeout: TimeInterval = 60,
+        quickLookupTimeout: TimeInterval = 20,
         lookupTimeout: TimeInterval = 45,
         log: DownloadLog? = nil
     ) {
         self.tools = tools
         self.idleTimeout = idleTimeout
+        self.quickLookupTimeout = quickLookupTimeout
         self.lookupTimeout = lookupTimeout
         self.log = log
     }
@@ -32,27 +36,32 @@ public struct DownloadEngine: Sendable {
     // MARK: - Looking a link up
 
     /// Asks `yt-dlp` about a link. It first uses YouTube's fastest client, which
-    /// reports the same pictures in about half the time, and falls back to the
-    /// normal clients if that is refused.
+    /// reports the same pictures in about half the time. That client is refused
+    /// or fails for some videos that are fine, so any failure of it, a slow one
+    /// included, is tried again with the normal clients, which get their own
+    /// time. Only a link that no client can download is not tried again.
     public func fetchInfo(for url: URL) async throws -> VideoInfo {
         let engine = self
-        return try await withTimeout(lookupTimeout) {
-            do {
-                return try await engine.lookUp(url, fast: true)
-            } catch let error as DownloadError where error.worthRetryingLookup {
-                engine.log?.note("Fast lookup failed (\(error)); trying the normal clients")
-                return try await engine.lookUp(url, fast: false)
+        do {
+            return try await withTimeout(quickLookupTimeout) {
+                try await engine.lookUp(url, fast: true, timeout: engine.quickLookupTimeout)
             }
+        } catch let error as DownloadError where error.worthRetryingLookup {
+            try Task.checkCancellation()
+            log?.note("Fast lookup failed (\(error)); trying the normal clients")
+        }
+        return try await withTimeout(lookupTimeout) {
+            try await engine.lookUp(url, fast: false, timeout: engine.lookupTimeout)
         }
     }
 
-    private func lookUp(_ url: URL, fast: Bool) async throws -> VideoInfo {
+    private func lookUp(_ url: URL, fast: Bool, timeout: TimeInterval) async throws -> VideoInfo {
         let result = try await ToolProcess.run(
             executable: tools.ytDlp,
             arguments: DownloadArguments.info(url: url, tools: tools, fast: fast),
             keepStdout: true,
-            // The overall cap is what ends a slow lookup, so this must not beat it.
-            idleTimeout: lookupTimeout * 2,
+            // The attempt's time limit is what ends a slow lookup, so this must not beat it.
+            idleTimeout: timeout * 2,
             log: log,
             onLine: { _ in }
         )
