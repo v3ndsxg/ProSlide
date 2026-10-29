@@ -12,7 +12,7 @@ final class DownloadEngineTests: XCTestCase {
     // MARK: - Downloading
 
     func testH264VideoIsMovedIntoPlaceWithoutConversion() async throws {
-        let setup = try makeSetup(video: "h264", audio: "aac")
+        let setup = try makeSetup()
 
         let progress = Progress()
         let file = try await setup.engine.download(
@@ -22,7 +22,7 @@ final class DownloadEngineTests: XCTestCase {
 
         XCTAssertEqual(file.lastPathComponent, "Welcome Loop - Sunday.mp4")
         XCTAssertEqual(try String(contentsOf: file), "mp4", "an H.264 download must not be re-encoded")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: setup.ffmpegLog.path), "ffmpeg was only asked to look")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: setup.ffmpegLog.path), "the app never runs ffmpeg itself")
         XCTAssertTrue(FileManager.default.fileExists(atPath: MediaItem.thumbnailURL(for: file).path))
         XCTAssertEqual(workFolderContents(setup.downloads), [], "the work folder must be emptied")
         XCTAssertEqual(MediaItem.scan(in: setup.downloads).map(\.title), ["Welcome Loop - Sunday"])
@@ -33,46 +33,25 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertEqual(progress.values.last?.phase, .finishing)
     }
 
-    func testVP9VideoIsConvertedWithTheHardwareEncoder() async throws {
-        let setup = try makeSetup(video: "vp9", audio: "opus")
+    func testA4KDownloadIsNeverReencoded() async throws {
+        let setup = try makeSetup()
+        let progress = Progress()
 
         let file = try await setup.engine.download(
             url: url, info: info, format: .mp4, quality: .p2160,
-            into: setup.downloads, progress: { _ in }
+            into: setup.downloads, progress: { progress.add($0) }
         )
 
-        XCTAssertEqual(try String(contentsOf: file), "converted")
-        let log = try String(contentsOf: setup.ffmpegLog)
-        XCTAssertTrue(log.contains("h264_videotoolbox"), log)
-        XCTAssertTrue(log.contains("-b:v 35M"), log)
-        XCTAssertTrue(log.contains("-c:a aac"), "opus audio must become AAC: \(log)")
-    }
-
-    func testAlreadyAACAudioIsCopiedWhenOnlyTheVideoChanges() async throws {
-        let setup = try makeSetup(video: "av1", audio: "aac")
-
-        _ = try await setup.engine.download(
-            url: url, info: info, format: .mp4, quality: .p2160,
-            into: setup.downloads, progress: { _ in }
-        )
-
-        XCTAssertTrue(try String(contentsOf: setup.ffmpegLog).contains("-c:a copy"))
-    }
-
-    func testSoftwareEncoderIsUsedWhenTheHardwareOneFails() async throws {
-        let setup = try makeSetup(video: "vp9", audio: "aac", failEncoder: "h264_videotoolbox")
-
-        let file = try await setup.engine.download(
-            url: url, info: info, format: .mp4, quality: .p2160,
-            into: setup.downloads, progress: { _ in }
-        )
-
-        XCTAssertEqual(try String(contentsOf: file), "converted")
-        XCTAssertTrue(try String(contentsOf: setup.ffmpegLog).contains("libx264"))
+        XCTAssertEqual(try String(contentsOf: file), "mp4", "the file yt-dlp made is the one in the bin")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: setup.ffmpegLog.path), "nothing is converted afterwards")
+        let line = try XCTUnwrap(try runs(setup).last)
+        XCTAssertTrue(line.contains("--remux-video mp4"), line)
+        XCTAssertTrue(line.contains("res:2160"), line)
+        XCTAssertEqual(progress.values.last?.phase, .finishing)
     }
 
     func testAudioDownloadIsAnMP3() async throws {
-        let setup = try makeSetup(video: "h264", audio: "aac")
+        let setup = try makeSetup()
 
         let file = try await setup.engine.download(
             url: url, info: info, format: .mp3, quality: .p1080,
@@ -84,7 +63,7 @@ final class DownloadEngineTests: XCTestCase {
     }
 
     func testARepeatDownloadIsNumberedRatherThanOverwritten() async throws {
-        let setup = try makeSetup(video: "h264", audio: "aac")
+        let setup = try makeSetup()
         var names: [String] = []
         for _ in 0..<3 {
             let file = try await setup.engine.download(
@@ -167,7 +146,7 @@ final class DownloadEngineTests: XCTestCase {
     // MARK: - Looking a link up
 
     func testFetchInfoReadsTheTitleAndTallestPicture() async throws {
-        let setup = try makeSetup(video: "h264", audio: "aac")
+        let setup = try makeSetup()
         let fetched = try await setup.engine.fetchInfo(for: url)
         XCTAssertEqual(fetched.title, "Welcome Loop: Sunday")
         XCTAssertEqual(fetched.maxHeight, 2160)
@@ -352,20 +331,6 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertEqual(file.lastPathComponent, "Their Own Title.mp4")
     }
 
-    func testConversionReportsHowFarItIs() async throws {
-        let setup = try makeSetup(video: "vp9", audio: "opus")
-        let progress = Progress()
-
-        _ = try await setup.engine.download(
-            url: url, info: info, format: .mp4, quality: .p2160,
-            into: setup.downloads, progress: { progress.add($0) }
-        )
-
-        // 30 s of a 72 s video, at 2x speed.
-        let converting = progress.values.filter { $0.phase == .converting }
-        XCTAssertTrue(converting.contains { abs(($0.fraction ?? 0) - 30.0 / 72.0) < 0.01 && $0.secondsLeft == 21 }, "\(converting)")
-    }
-
     // MARK: - Setup
 
     private struct Setup {
@@ -377,11 +342,9 @@ final class DownloadEngineTests: XCTestCase {
     }
 
     /// A stand-in `yt-dlp` that behaves like a successful one unless `ytDlpBody`
-    /// replaces it, and a stand-in `ffmpeg` that reports the given codecs.
+    /// replaces it, and a stand-in `ffmpeg` that records being run, which the
+    /// engine should never do.
     private func makeSetup(
-        video: String = "h264",
-        audio: String = "aac",
-        failEncoder: String? = nil,
         failFastLookup: Bool = false,
         fastLookupError: String = "ERROR: something odd happened",
         slowFastLookup: Bool = false,
@@ -437,20 +400,7 @@ final class DownloadEngineTests: XCTestCase {
         printf jpg > "$(printf '%s' "$thumb" | sed 's/%(ext)s/jpg/')"
         """)
 
-        let failure = failEncoder.map { "case \"$*\" in *\($0)*) exit 1 ;; esac" } ?? ""
-        let ffmpeg = """
-        if [ "$#" -eq 3 ] && [ "$2" = "-i" ]; then
-          echo "Input #0, mov,mp4, from '$3':" >&2
-          echo "  Stream #0:0: Video: \(video) (High), yuv420p, 1920x1080" >&2
-          echo "  Stream #0:1: Audio: \(audio), 48000 Hz, stereo" >&2
-          echo "At least one output file must be specified" >&2
-          exit 1
-        fi
-        echo "$@" >> "\(log.path)"
-        \(failure)
-        echo "frame=1 fps=2 q=1 size=1kB time=00:00:30.00 bitrate=1kbits/s speed=2.0x" >&2
-        printf converted > "${@: -1}"
-        """
+        let ffmpeg = "echo \"$@\" >> \"\(log.path)\""
 
         try writeTool("yt-dlp", body: ytDlp, in: toolsDirectory)
         try writeTool("ffmpeg", body: ffmpeg, in: toolsDirectory)

@@ -6,13 +6,15 @@ import Foundation
 ///
 /// Kept small: when the file passes `maxBytes` the older half is dropped.
 public final class DownloadLog: @unchecked Sendable {
-    /// `~/Library/Logs/<app name>/downloads.log`
+    /// `~/Documents/<app folder>/Logs/downloads.log`
     public static let shared = DownloadLog(fileURL: defaultURL)
 
+    /// Beside `Bin`, `Pro` and `Downloads`, where the app's other files are.
+    /// It used to be in `~/Library/Logs`, which Finder hides, so nobody could
+    /// find it to send.
     public static var defaultURL: URL {
-        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
+        BinStorage.rootURL.deletingLastPathComponent()
             .appendingPathComponent("Logs", isDirectory: true)
-            .appendingPathComponent(AppIdentity.current.displayName, isDirectory: true)
             .appendingPathComponent("downloads.log")
     }
 

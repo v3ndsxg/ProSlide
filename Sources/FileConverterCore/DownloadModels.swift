@@ -48,7 +48,7 @@ public struct DownloadProgress: Equatable, Sendable {
     /// In the order a download goes through them. Updates can arrive late, so
     /// the queue never moves an item back to an earlier phase.
     public enum Phase: Int, Comparable, Sendable {
-        case video, audio, merging, finishing, converting
+        case video, audio, merging, finishing
 
         public static func < (lhs: Phase, rhs: Phase) -> Bool { lhs.rawValue < rhs.rawValue }
     }
@@ -75,7 +75,6 @@ public struct DownloadProgress: Equatable, Sendable {
         case .audio: parts = ["Downloading audio"]
         case .merging: return "Merging video and audio"
         case .finishing: return "Finishing\u{2026}"
-        case .converting: parts = ["Converting to H.264"]
         }
         if let fraction { parts.append("\(Int((fraction * 100).rounded()))%") }
         if phase == .video || phase == .audio, let speed = bytesPerSecond, speed > 0 {
@@ -98,13 +97,12 @@ public struct VideoFormat: Equatable, Sendable {
     /// The shorter side in pixels. This is how yt-dlp, and so the quality
     /// picker, measures a picture: a vertical 1080x1920 Short is 1080, not 1920.
     public let resolution: Int
-    /// True for H.264, and for a codec the site doesn't name, which is given the
-    /// benefit of the doubt: the file is checked after it downloads anyway.
-    public let isH264: Bool
+    /// AV1, which the download avoids: Macs before the M3 can't play it.
+    public let isAV1: Bool
 
-    public init(resolution: Int, isH264: Bool) {
+    public init(resolution: Int, isAV1: Bool = false) {
         self.resolution = resolution
-        self.isH264 = isH264
+        self.isAV1 = isAV1
     }
 }
 
@@ -113,7 +111,8 @@ public struct VideoInfo: Equatable, Sendable {
     public let title: String
     public let duration: TimeInterval?
     /// The best picture on offer, measured by its shorter side, or nil when the
-    /// site doesn't say.
+    /// site doesn't say. AV1 doesn't count unless it is all there is, since the
+    /// download avoids it.
     public let maxHeight: Int?
     public let isLive: Bool
     public let formats: [VideoFormat]
@@ -156,19 +155,6 @@ public struct VideoInfo: Equatable, Sendable {
             && lhs.isLive == rhs.isLive && lhs.formats == rhs.formats
     }
 
-    /// Whether downloading at `quality` ends in a video that isn't H.264 and has
-    /// to be converted. It follows what the download asks for: the best picture
-    /// up to the chosen height (or the smallest above it if none is that small),
-    /// preferring H.264 at that height.
-    public func convertsToH264(at quality: DownloadQuality) -> Bool {
-        guard !formats.isEmpty else { return false }
-        let within = formats.filter { $0.resolution <= quality.rawValue }
-        let target = within.isEmpty
-            ? formats.map(\.resolution).min() ?? 0
-            : within.map(\.resolution).max() ?? 0
-        return !formats.contains { $0.resolution == target && $0.isH264 }
-    }
-
     /// Reads the JSON that `yt-dlp --dump-single-json` prints.
     public static func parse(_ json: Data, fetchedAt: Date = Date()) throws -> VideoInfo {
         guard let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any] else {
@@ -186,13 +172,15 @@ public struct VideoInfo: Equatable, Sendable {
         let formats: [VideoFormat] = (object["formats"] as? [[String: Any]] ?? []).compactMap { format in
             let codec = (format["vcodec"] as? String) ?? ""
             guard codec != "none", let side = shorterSide(format) else { return nil }
-            let isH264 = codec.isEmpty || codec == "unknown" || codec.hasPrefix("avc") || codec.hasPrefix("h264")
-            return VideoFormat(resolution: side, isH264: isH264)
+            return VideoFormat(resolution: side, isAV1: codec.hasPrefix("av01"))
         }
+        // The best picture the download would actually pick, which leaves AV1
+        // out unless a video has nothing else.
+        let playable = formats.contains { !$0.isAV1 } ? formats.filter { !$0.isAV1 } : formats
         return VideoInfo(
             title: (object["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Download",
             duration: (object["duration"] as? NSNumber)?.doubleValue,
-            maxHeight: formats.map(\.resolution).max() ?? shorterSide(object),
+            maxHeight: playable.map(\.resolution).max() ?? shorterSide(object),
             isLive: (object["is_live"] as? Bool) ?? false,
             formats: formats,
             json: json,
@@ -218,7 +206,6 @@ public enum DownloadError: Error, Equatable, LocalizedError {
     case lookupTimedOut
     case badMetadata
     case noOutput
-    case conversionFailed(String)
     case toolFailed(String)
 
     public var errorDescription: String? {
@@ -255,8 +242,6 @@ public enum DownloadError: Error, Equatable, LocalizedError {
             "Couldn\u{2019}t read this video\u{2019}s details."
         case .noOutput:
             "The download finished but produced no file."
-        case .conversionFailed(let detail):
-            "Couldn\u{2019}t convert the video to MP4. \(detail)"
         case .toolFailed(let detail):
             "The download failed. The site may have changed; check for a ProSlide Beta update. \(detail)"
         }
@@ -266,7 +251,7 @@ public enum DownloadError: Error, Equatable, LocalizedError {
     /// offers a Retry button.
     public var isRetryable: Bool {
         switch self {
-        case .timedOut, .network, .botCheck, .toolFailed, .noOutput, .conversionFailed, .lookupTimedOut: true
+        case .timedOut, .network, .botCheck, .toolFailed, .noOutput, .lookupTimedOut: true
         default: false
         }
     }

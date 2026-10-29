@@ -139,7 +139,10 @@ public final class DownloadQueue: ObservableObject {
         defaults: UserDefaults = .standard
     ) {
         let directory = BinStorage.downloadsDirectory(besideBin: BinStorage.rootURL)
+        // A line at every launch, so the log exists, and says which tools it
+        // used, before anything is downloaded.
         if case .available(let tools) = availability {
+            DownloadLog.shared.note("Downloader ready; tools in \(tools.ytDlp.deletingLastPathComponent().path)")
             let engine = DownloadEngine(tools: tools, log: .shared)
             self.init(
                 availability: availability,
@@ -155,6 +158,7 @@ public final class DownloadQueue: ObservableObject {
             )
         } else {
             let reason = availability.error ?? .toolsMissing
+            DownloadLog.shared.note("Downloader unavailable: \(reason)")
             self.init(
                 availability: availability,
                 defaults: defaults,
