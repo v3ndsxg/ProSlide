@@ -152,12 +152,8 @@ public struct DownloadEngine: Sendable {
         guard result.status == 0 else { throw DownloadError.fromToolOutput(result.tail) }
         progress(DownloadProgress(phase: .finishing))
 
-        var finished = try downloadedFile(in: work, format: format)
+        let finished = try downloadedFile(in: work, format: format)
         let title = info?.title ?? finished.deletingPathExtension().lastPathComponent
-        if format == .mp4 {
-            finished = try await makeCompatible(finished, quality: quality, duration: info?.duration,
-                                                work: work, progress: progress)
-        }
 
         let name = DownloadFileNames.sanitize(title)
         let destination = DownloadFileNames.uniqueURL(base: name, extension: format.rawValue, in: downloadsDirectory)
@@ -174,70 +170,14 @@ public struct DownloadEngine: Sendable {
         return destination
     }
 
-    /// The media file `yt-dlp` produced, whatever container it picked.
+    /// The media file `yt-dlp` produced. It is always an MP4 or MP3: `yt-dlp`
+    /// repackages any other container itself, or fails.
     private func downloadedFile(in work: URL, format: DownloadFormat) throws -> URL {
-        let wanted = format == .mp4 ? ["mp4", "mkv", "webm", "mov", "m4v"] : ["mp3"]
         let files = (try? FileManager.default.contentsOfDirectory(at: work, includingPropertiesForKeys: nil)) ?? []
-        guard let file = files.first(where: {
-            wanted.contains($0.pathExtension.lowercased()) && $0.lastPathComponent != DownloadArguments.convertedFileName
-        }) else { throw DownloadError.noOutput }
-        return file
-    }
-
-    // MARK: - Making the video play in ProPresenter
-
-    /// Leaves a file that is already H.264 video and AAC audio in an MP4 alone,
-    /// and otherwise converts only what has to change. This is what 4K needs:
-    /// YouTube serves it as VP9 or AV1, which ProPresenter doesn't list.
-    private func makeCompatible(
-        _ file: URL,
-        quality: DownloadQuality,
-        duration: TimeInterval?,
-        work: URL,
-        progress: @escaping @Sendable (DownloadProgress) -> Void
-    ) async throws -> URL {
-        let streams = try await inspect(file)
-        let videoIsH264 = streams.video == "h264"
-        let audioIsAAC = streams.audio == nil || streams.audio == "aac"
-        if file.pathExtension.lowercased() == "mp4" && videoIsH264 && audioIsAAC { return file }
-
-        progress(DownloadProgress(phase: .converting, fraction: duration == nil ? nil : 0))
-        let output = work.appendingPathComponent(DownloadArguments.convertedFileName)
-        let tries: [String] = videoIsH264 ? ["copy"] : ["h264_videotoolbox", "libx264"]
-        var lastTail: [String] = []
-        for encoder in tries {
-            try? FileManager.default.removeItem(at: output)
-            let result = try await ToolProcess.run(
-                executable: tools.ffmpeg,
-                arguments: DownloadArguments.convert(
-                    input: file, output: output, videoEncoder: encoder,
-                    copyAudio: audioIsAAC, quality: quality
-                ),
-                idleTimeout: idleTimeout,
-                log: log,
-                onLine: { line in
-                    if let update = ConversionProgress.parse(line, duration: duration) { progress(update) }
-                }
-            )
-            if result.status == 0, FileManager.default.fileExists(atPath: output.path) { return output }
-            lastTail = result.tail
+        guard let file = files.first(where: { $0.pathExtension.lowercased() == format.rawValue }) else {
+            throw DownloadError.noOutput
         }
-        throw DownloadError.conversionFailed(lastTail.last ?? "")
-    }
-
-    /// The video and audio codecs in `file`. ffmpeg prints them and exits with an
-    /// error when given no output, so that exit status is ignored; this avoids
-    /// needing ffprobe.
-    private func inspect(_ file: URL) async throws -> (video: String?, audio: String?) {
-        let result = try await ToolProcess.run(
-            executable: tools.ffmpeg,
-            arguments: ["-hide_banner", "-i", file.path],
-            idleTimeout: idleTimeout,
-            log: log,
-            onLine: { _ in }
-        )
-        let text = result.tail.joined(separator: "\n")
-        return (DownloadArguments.codec("Video", in: text), DownloadArguments.codec("Audio", in: text))
+        return file
     }
 }
 
@@ -246,7 +186,6 @@ public struct DownloadEngine: Sendable {
 enum DownloadArguments {
     static let mediaBaseName = "download"
     static let thumbnailFileName = "thumb.jpg"
-    static let convertedFileName = "converted.mp4"
 
     /// YouTube's fastest client. It reports the same pictures and codecs as the
     /// normal ones in about half the time, and its links need no challenge
@@ -301,13 +240,12 @@ enum DownloadArguments {
         ]
         switch format {
         case .mp4:
-            // The tallest picture up to the chosen height, and at that height
-            // H.264 and AAC when they exist, since those play in ProPresenter
-            // without conversion.
+            // Merged or repackaged into an MP4 by copying, never re-encoded.
             arguments += [
-                "-f", "bv*+ba/b",
-                "-S", "res:\(quality.rawValue),vcodec:h264,acodec:aac",
+                "-f", videoFormats,
+                "-S", videoOrder(quality),
                 "--merge-output-format", "mp4",
+                "--remux-video", "mp4",
             ]
         case .mp3:
             arguments += ["-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", "320K"]
@@ -318,46 +256,20 @@ enum DownloadArguments {
         return arguments + ["--", url.absoluteString]
     }
 
-    /// Converts `input` to an MP4 with H.264 video and AAC audio. Video and audio
-    /// that are already right are copied, not re-encoded.
-    static func convert(
-        input: URL,
-        output: URL,
-        videoEncoder: String,
-        copyAudio: Bool,
-        quality: DownloadQuality
-    ) -> [String] {
-        var arguments = ["-hide_banner", "-y", "-i", input.path, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", videoEncoder]
-        switch videoEncoder {
-        case "copy":
-            break
-        case "libx264":
-            arguments += ["-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p"]
-        default:
-            arguments += ["-b:v", bitrate(for: quality), "-pix_fmt", "yuv420p"]
-        }
-        arguments += copyAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-b:a", "192k"]
-        return arguments + ["-movflags", "+faststart", output.path]
-    }
+    /// Nothing is converted: the download is picked so it plays as it comes.
+    /// AV1 is left out because Macs before the M3 can't decode it, so it wouldn't
+    /// play in ProPresenter; it is used only if a video has nothing else. A codec
+    /// the site doesn't name (`?`) is kept. YouTube's VP9, its only choice above
+    /// 1080p, plays in ProPresenter.
+    static let videoFormats = "bv*[vcodec!^=?av01]+ba/b[vcodec!^=?av01]/bv*+ba/b"
 
-    /// Video bitrates within what ProPresenter recommends for HD and 4K.
-    static func bitrate(for quality: DownloadQuality) -> String {
-        switch quality {
-        case .p2160: "35M"
-        case .p1440: "20M"
-        case .p1080: "12M"
-        case .p720: "8M"
-        default: "5M"
-        }
-    }
-
-    /// The codec on the first `kind` stream line of `ffmpeg -i` output, such as
-    /// "h264" from "Stream #0:0: Video: h264 (High), yuv420p".
-    static func codec(_ kind: String, in text: String) -> String? {
-        guard let range = text.range(of: "\(kind): ") else { return nil }
-        let rest = text[range.upperBound...]
-        let name = rest.prefix { $0.isLetter || $0.isNumber || $0 == "_" }
-        return name.isEmpty ? nil : String(name).lowercased()
+    /// Which of those to prefer, in order: the tallest picture up to the chosen
+    /// height; standard over HDR, since ProPresenter shows standard colour; then
+    /// H.264, which every Mac decodes in hardware, before HEVC and VP9; a direct
+    /// download before a streamed one (YouTube's HLS copy comes in fragments and
+    /// is slower); and AAC sound, which YouTube offers on nearly every video.
+    static func videoOrder(_ quality: DownloadQuality) -> String {
+        "res:\(quality.rawValue),+hdr,+vcodec:avc,proto,acodec:aac"
     }
 }
 
@@ -389,7 +301,8 @@ final class ProgressParser: @unchecked Sendable {
             return nil
         }
         if line.hasPrefix("[Merger]") { return DownloadProgress(phase: .merging) }
-        if line.hasPrefix("[ExtractAudio]") || line.hasPrefix("[VideoConvertor]") || line.hasPrefix("[Fixup") {
+        if line.hasPrefix("[ExtractAudio]") || line.hasPrefix("[VideoConvertor]") || line.hasPrefix("[VideoRemuxer]")
+            || line.hasPrefix("[Fixup") {
             return DownloadProgress(phase: .finishing)
         }
         guard line.hasPrefix("[download]"), let reading = Reading(line) else { return nil }
@@ -469,34 +382,6 @@ final class ProgressParser: @unchecked Sendable {
             guard parts.count == text.split(separator: ":").count, (2...3).contains(parts.count) else { return nil }
             return parts.reduce(0) { $0 * 60 + $1 }
         }
-    }
-}
-
-/// Reads ffmpeg's "time=00:00:12.34 … speed=2.5x" progress lines while a video
-/// is converted, using the video's length to turn them into a fraction.
-enum ConversionProgress {
-    static func parse(_ line: String, duration: TimeInterval?) -> DownloadProgress? {
-        guard let elapsed = value(after: "time=", in: line).flatMap(seconds) else { return nil }
-        let speed = value(after: "speed=", in: line).flatMap { Double($0.replacingOccurrences(of: "x", with: "")) }
-        guard let duration, duration > 0 else {
-            return DownloadProgress(phase: .converting)
-        }
-        let fraction = min(max(elapsed / duration, 0), 1)
-        var left: Int?
-        if let speed, speed > 0 { left = Int(max(duration - elapsed, 0) / speed) }
-        return DownloadProgress(phase: .converting, fraction: fraction, secondsLeft: left)
-    }
-
-    private static func value(after key: String, in line: String) -> String? {
-        guard let range = line.range(of: key) else { return nil }
-        return line[range.upperBound...].split(separator: " ").first.map(String.init)
-    }
-
-    /// "00:01:23.45" as seconds.
-    private static func seconds(_ text: String) -> Double? {
-        let parts = text.split(separator: ":").compactMap { Double($0) }
-        guard parts.count == 3 else { return nil }
-        return parts[0] * 3600 + parts[1] * 60 + parts[2]
     }
 }
 

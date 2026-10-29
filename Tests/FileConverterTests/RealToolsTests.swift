@@ -9,7 +9,7 @@ import XCTest
 /// CI does after packaging the app. It never leaves the machine.
 final class RealToolsTests: XCTestCase {
 
-    func testEngineDownloadsAndConvertsWithTheRealTools() async throws {
+    func testEngineDownloadsWithTheRealTools() async throws {
         guard let tools = DownloadTools.locate(resources: nil) else {
             throw XCTSkip("\(DownloadTools.overrideVariable) is not set to a folder of tools")
         }
@@ -20,8 +20,8 @@ final class RealToolsTests: XCTestCase {
         try FileManager.default.createDirectory(at: served, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
 
-        // Two tiny clips: one already in the format ProPresenter plays, one in
-        // the VP9 and Opus that YouTube serves at 4K.
+        // Two tiny clips: one in H.264 and AAC, one in the VP9 and Opus that
+        // YouTube serves at 4K, in a WebM.
         let testPicture = ["-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=15"]
         let testTone = ["-f", "lavfi", "-i", "sine=frequency=440:duration=2"]
         try await ffmpeg(tools, ["-hide_banner", "-y"] + testPicture + testTone
@@ -58,16 +58,16 @@ final class RealToolsTests: XCTestCase {
         XCTAssertEqual(directCodecs.video, "h264")
         XCTAssertEqual(directCodecs.audio, "aac")
 
-        // VP9 and Opus are converted to H.264 and AAC in an MP4.
+        // A WebM is repackaged as an MP4, with its VP9 and Opus left as they are.
         let webmInfo = VideoInfo(title: "VP9 clip", duration: 2, maxHeight: 240, isLive: false)
-        let converted = try await engine.download(
+        let repackaged = try await engine.download(
             url: link("vp9.webm"), info: webmInfo, format: .mp4, quality: .p2160,
             into: downloads, progress: { _ in }
         )
-        XCTAssertEqual(converted.pathExtension, "mp4")
-        let convertedCodecs = try await codecs(of: converted, tools: tools)
-        XCTAssertEqual(convertedCodecs.video, "h264")
-        XCTAssertEqual(convertedCodecs.audio, "aac")
+        XCTAssertEqual(repackaged.pathExtension, "mp4")
+        let repackagedCodecs = try await codecs(of: repackaged, tools: tools)
+        XCTAssertEqual(repackagedCodecs.video, "vp9")
+        XCTAssertEqual(repackagedCodecs.audio, "opus")
 
         // Audio only.
         let audio = try await engine.download(
@@ -97,7 +97,15 @@ final class RealToolsTests: XCTestCase {
             idleTimeout: 60, onLine: { _ in }
         )
         let text = result.tail.joined(separator: "\n")
-        return (DownloadArguments.codec("Video", in: text), DownloadArguments.codec("Audio", in: text))
+        return (codec("Video", in: text), codec("Audio", in: text))
+    }
+
+    /// The codec on the first `kind` stream line of `ffmpeg -i` output, such as
+    /// "h264" from "Stream #0:0: Video: h264 (High), yuv420p".
+    private func codec(_ kind: String, in text: String) -> String? {
+        guard let range = text.range(of: "\(kind): ") else { return nil }
+        let name = text[range.upperBound...].prefix { $0.isLetter || $0.isNumber || $0 == "_" }
+        return name.isEmpty ? nil : String(name).lowercased()
     }
 
     private func waitForServer(port: Int) async throws {

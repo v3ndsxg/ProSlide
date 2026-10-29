@@ -194,9 +194,6 @@ struct DownloaderView: View {
             var parts = [Self.site(of: link)]
             if let duration = info.duration { parts.append(Self.clock(duration)) }
             if let height = info.maxHeight { parts.append("up to \(height >= 2160 ? "4K" : "\(height)p")") }
-            if downloads.format == .mp4, info.convertsToH264(at: downloads.quality) {
-                parts.append("will be converted to H.264")
-            }
             return parts.joined(separator: " \u{00B7} ")
         case .failed(let reason)?: return reason
         default: return "\(Self.site(of: link)) \u{00B7} checking\u{2026}"
@@ -275,6 +272,9 @@ struct DownloaderView: View {
         HStack {
             Text("Only download videos you own or have permission to use.")
                 .font(.caption).foregroundStyle(.secondary)
+            Button("Show Download Log") { showLog() }
+                .buttonStyle(.link)
+                .font(.caption)
             Spacer()
             if downloads.isDownloading {
                 Button("Stop", role: .destructive) { downloads.cancel() }
