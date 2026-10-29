@@ -25,6 +25,21 @@ private final class ToolActivity: @unchecked Sendable {
     }
 }
 
+/// Notes when a tool first prints anything: how long it took to start up,
+/// which the log records so a slow start can be told apart from a slow site.
+private final class FirstOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seen = false
+
+    /// Seconds since `start` the first time it is called, then nil.
+    func mark(since start: Date) -> TimeInterval? {
+        lock.lock(); defer { lock.unlock() }
+        guard !seen else { return nil }
+        seen = true
+        return Date().timeIntervalSince(start)
+    }
+}
+
 private struct ReadResult: Sendable {
     var all: [String] = []
     var tail: [String] = []
@@ -111,7 +126,11 @@ enum ToolProcess {
         process.standardInput = FileHandle.nullDevice
 
         let activity = ToolActivity()
+        let firstOutput = FirstOutput()
         let record: @Sendable (String) -> Void = { line in
+            if let seconds = firstOutput.mark(since: started) {
+                log?.note("\(name) first output after \(String(format: "%.1f", seconds))s")
+            }
             log?.note("\(name)> \(line)")
             onLine(line)
         }

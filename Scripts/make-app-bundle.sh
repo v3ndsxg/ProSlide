@@ -85,7 +85,8 @@ cp "$EXECUTABLE" "$APP/Contents/MacOS/ProSlide"
 # The Downloader's tools, pinned by checksum in Scripts/tools.lock. They are
 # fetched on this Mac and never committed. Their own signatures are left alone:
 # yt-dlp is ad-hoc signed upstream, and re-signing a PyInstaller program can
-# corrupt it. The app seal below covers them as resources.
+# corrupt it. The app seal below covers them as resources. yt-dlp is its
+# unpacked build, so Tools also holds the `_internal` folder it loads from.
 if [ "$WITH_TOOLS" -eq 1 ] && [ -f "$ROOT/Scripts/tools.lock" ]; then
     echo "Fetching the download tools (pinned in Scripts/tools.lock)…"
     "$ROOT/Scripts/fetch-tools.sh" "$APP/Contents/Resources/Tools"

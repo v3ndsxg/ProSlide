@@ -102,18 +102,13 @@ jobs:
           for encoder in libx264 libmp3lame libvpx-vp9 libopus; do
             grep -q "$encoder" <<<"$encoders" || { echo "ffmpeg lacks $encoder"; exit 1; }
           done
-          # The Mac's own H.264 encoder is what 4K conversion prefers. A runner
-          # may not offer it, which is why the engine can fall back to libx264.
-          if grep -q h264_videotoolbox <<<"$encoders"; then
-            if "$TOOLS/ffmpeg" -hide_banner -loglevel error -y -f lavfi -i testsrc=duration=1:size=320x240:rate=15 \
-                 -c:v h264_videotoolbox -b:v 2M "$RUNNER_TEMP/vt.mp4"; then
-              echo "h264_videotoolbox works on this runner"
-            else
-              echo "::warning title=Hardware encoder unavailable::h264_videotoolbox is listed but would not encode on this runner; 4K conversion would use libx264 here."
-            fi
-          else
-            echo "::warning title=Hardware encoder missing::This ffmpeg has no h264_videotoolbox."
-          fi
+
+          # How long yt-dlp takes to start from inside the app. Its single-file
+          # build took 8 to 17 s on an M2 Pro before printing anything.
+          TIMEFORMAT='%Rs'
+          for run in 1 2 3; do
+            echo "yt-dlp start-up, run $run: $( { time "$TOOLS/yt-dlp" --ignore-config --list-extractors >/dev/null; } 2>&1 )"
+          done
 
       - name: Test
         # `shell: bash` implies -eo pipefail. Without it the pipeline's exit
