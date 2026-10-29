@@ -25,6 +25,26 @@ public struct DownloadLink: Identifiable, Equatable, Sendable {
             .filter { seen.insert($0.id).inserted }
     }
 
+    /// Pasted text with one link per line, which the link box shows as it is
+    /// typed or pasted. Links that arrive run together, separated by spaces, or
+    /// separated by a newline written out as `%0A` (as text copied out of an
+    /// encoded email can be) are split onto lines of their own. A space at the
+    /// very end is left alone, so typing isn't disturbed.
+    public static func onePerLine(_ text: String) -> String {
+        var result = text.replacingOccurrences(
+            of: "%0D%0A|%0A|%0D", with: "\n", options: [.regularExpression, .caseInsensitive]
+        )
+        // A link starting part-way along a line: "…watch?v=abchttps://…". One
+        // inside another link, as a query value ("?u=https://…") or in a path
+        // ("/web/2020/https://…"), stays where it is.
+        result = result.replacingOccurrences(
+            of: #"(?<=[^\s=/])(?=https?://)"#, with: "\n", options: [.regularExpression, .caseInsensitive]
+        )
+        // Spaces or tabs between two pieces of text.
+        result = result.replacingOccurrences(of: #"(?<=\S)[ \t]+(?=\S)"#, with: "\n", options: .regularExpression)
+        return result
+    }
+
     static func classify(_ text: String) -> DownloadLink {
         guard let url = webURL(text),
               let host = url.host?.lowercased(), !host.isEmpty else {
@@ -70,15 +90,22 @@ public struct DownloadLink: Identifiable, Equatable, Sendable {
         if host == "youtu.be" || host.hasSuffix(".youtu.be") {
             candidate = parts.first
         } else if parts == ["watch"] {
-            candidate = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first { $0.name == "v" }?.value
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            candidate = items.first { $0.name == "v" }?.value
+                // "watch?v%3DID": the "=" was encoded, so "v=ID" reads as the item's name.
+                ?? items.first { $0.name.hasPrefix("v=") }.map { String($0.name.dropFirst(2)) }
         } else if parts.count >= 2, ["shorts", "live", "embed", "v", "e"].contains(parts[0]) {
             candidate = parts[1]
         } else {
             candidate = nil
         }
-        guard let id = candidate, isVideoID(id) else { return nil }
-        return id
+        guard var id = candidate else { return nil }
+        // "watch?v=3DID": the link passed through an email's quoted-printable
+        // encoding, which writes "=" as "=3D".
+        if id.count == 13, id.hasPrefix("3D"), isVideoID(String(id.dropFirst(2))) {
+            id = String(id.dropFirst(2))
+        }
+        return isVideoID(id) ? id : nil
     }
 
     /// YouTube video ids are 11 letters, digits, `-` and `_`.

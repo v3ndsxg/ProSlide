@@ -43,6 +43,16 @@ final class DownloadQueueTests: XCTestCase {
         XCTAssertTrue(queue.isOffered(.p2160), "one link with 4K is enough")
     }
 
+    func testLinksPastedTogetherAreShownOnePerLine() {
+        let queue = makeQueue()
+        queue.linkText = "https://example.com/onehttps://example.com/two https://example.com/three"
+        XCTAssertEqual(queue.linkText, "https://example.com/one\nhttps://example.com/two\nhttps://example.com/three")
+        XCTAssertEqual(queue.downloadableLinks.count, 3)
+
+        queue.linkText += " "
+        XCTAssertTrue(queue.linkText.hasSuffix(" "), "a space being typed at the end stays")
+    }
+
     func testALinkIsLookedUpOnceAndOneThatFailsSaysWhy() async throws {
         let calls = Counter()
         let queue = makeQueue(lookUp: { url in

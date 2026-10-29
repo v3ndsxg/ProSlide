@@ -93,13 +93,20 @@ struct DownloaderView: View {
                 TextEditor(text: $downloads.linkText)
                     .font(.system(size: Self.entryFontSize))
                     .scrollContentBackground(.hidden)
+                    // It grows to eight lines before it needs to scroll. With
+                    // scroll bars set to always show, its bar looked like a stray
+                    // grey box beside Paste.
+                    .scrollIndicators(.never)
+                    // Brings the first line, and the cursor, level with the
+                    // placeholder and the middle of the link icon.
+                    .padding(.top, Self.entryTopInset)
                     .frame(height: entryHeight)
                 if downloads.linkText.isEmpty {
                     Text("Paste a video link, or several, one per line\u{2026}")
                         .font(.system(size: Self.entryFontSize))
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
-                        .padding(.top, 5)
+                        .padding(.top, Self.entryTopInset)
                         .allowsHitTesting(false)
                 }
             }
@@ -111,12 +118,15 @@ struct DownloaderView: View {
 
     private static let entryFontSize: CGFloat = 14
     private static let entryLineHeight: CGFloat = 19
+    private static let entryTopInset: CGFloat = 5
 
     /// Room for four lines to start, growing with what is pasted up to eight;
-    /// past that the box scrolls on its own.
+    /// past that the box scrolls on its own. A long link wraps, so it counts as
+    /// the lines it takes, at about 60 characters to a line.
     private var entryHeight: CGFloat {
-        let lines = downloads.linkText.split(separator: "\n", omittingEmptySubsequences: false).count
-        return CGFloat(min(max(lines, 4), 8)) * Self.entryLineHeight + 10
+        let lines = downloads.linkText.split(separator: "\n", omittingEmptySubsequences: false)
+            .reduce(0) { $0 + max(1, ($1.count + 59) / 60) }
+        return CGFloat(min(max(lines, 4), 8)) * Self.entryLineHeight + Self.entryTopInset + 10
     }
 
     private func paste() {
