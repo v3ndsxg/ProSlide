@@ -232,6 +232,7 @@ final class DownloadEngineTests: XCTestCase {
 
     func testALookupThatTakesTooLongGivesUp() async throws {
         var setup = try makeSetup(ytDlpBody: "exec sleep 30")
+        setup.engine.quickLookupTimeout = 1
         setup.engine.lookupTimeout = 1
 
         let start = Date()
@@ -241,7 +242,21 @@ final class DownloadEngineTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? DownloadError, .lookupTimedOut)
         }
-        XCTAssertLessThan(Date().timeIntervalSince(start), 6)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 10)
+        XCTAssertEqual(try runs(setup).count, 2, "a slow quick lookup is tried again the normal way")
+    }
+
+    func testASlowQuickLookupLeavesTheNormalOneItsOwnTime() async throws {
+        var setup = try makeSetup(slowFastLookup: true)
+        setup.engine.quickLookupTimeout = 1
+        setup.engine.lookupTimeout = 10
+
+        let fetched = try await setup.engine.fetchInfo(for: url)
+
+        XCTAssertEqual(fetched.maxHeight, 2160)
+        let lines = try runs(setup)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertFalse(lines[1].contains("player_client=visionos"))
     }
 
     func testLookupUsesTheFastClientAndFallsBackToTheNormalOnes() async throws {
@@ -259,15 +274,22 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertFalse(lines[1].contains("player_client=visionos"))
     }
 
-    func testAVideoThatIsPrivateIsNotRetriedWithOtherClients() async throws {
-        let setup = try makeSetup(ytDlpBody: "echo 'ERROR: [youtube] abc: Private video' >&2\nexit 1")
+    func testAVideoTheQuickClientCallsUnavailableIsAskedAgainTheNormalWay() async throws {
+        let setup = try makeSetup(failFastLookup: true, fastLookupError: "ERROR: [youtube] abc: Video unavailable")
+        let fetched = try await setup.engine.fetchInfo(for: url)
+        XCTAssertEqual(fetched.title, "Welcome Loop: Sunday")
+        XCTAssertEqual(try runs(setup).count, 2)
+    }
+
+    func testALinkNoClientCanDownloadIsNotAskedAgain() async throws {
+        let setup = try makeSetup(ytDlpBody: "echo 'ERROR: Unsupported URL: https://example.com/x' >&2\nexit 1")
         do {
             _ = try await setup.engine.fetchInfo(for: url)
             XCTFail("expected a failure")
         } catch {
-            XCTAssertEqual(error as? DownloadError, .privateVideo)
+            XCTAssertEqual(error as? DownloadError, .unsupportedSite)
         }
-        XCTAssertEqual(try runs(setup).count, 1, "asking again another way can't make a private video public")
+        XCTAssertEqual(try runs(setup).count, 1, "no YouTube client makes an unsupported site supported")
     }
 
     // MARK: - Starting from the lookup
@@ -361,6 +383,8 @@ final class DownloadEngineTests: XCTestCase {
         audio: String = "aac",
         failEncoder: String? = nil,
         failFastLookup: Bool = false,
+        fastLookupError: String = "ERROR: something odd happened",
+        slowFastLookup: Bool = false,
         failSavedLookup: Bool = false,
         ytDlpBody: String? = nil
     ) throws -> Setup {
@@ -370,9 +394,14 @@ final class DownloadEngineTests: XCTestCase {
         let log = root.appendingPathComponent("ffmpeg.log")
         let ytDlpLog = root.appendingPathComponent("yt-dlp.log")
 
-        let fastFailure = failFastLookup
-            ? #"case "$*" in *player_client=visionos*) echo "ERROR: something odd happened" >&2; exit 1 ;; esac"#
-            : ""
+        let fastFailure: String
+        if failFastLookup {
+            fastFailure = #"case "$*" in *player_client=visionos*) echo "\#(fastLookupError)" >&2; exit 1 ;; esac"#
+        } else if slowFastLookup {
+            fastFailure = #"case "$*" in *player_client=visionos*) exec sleep 30 ;; esac"#
+        } else {
+            fastFailure = ""
+        }
         let savedFailure = failSavedLookup
             ? #"case "$*" in *--load-info-json*) echo "ERROR: unable to download video data: HTTP Error 403: Forbidden" >&2; exit 1 ;; esac"#
             : ""

@@ -117,9 +117,9 @@ These live on the `beta` branch and are not in `main` yet. New work is tested th
 ### Downloader
 The **Downloader** tab saves videos as MP4 or just their audio as MP3, from YouTube and most social media sites, straight into the bin.
 
-1. Switch to the **Downloader** tab, and paste one link per line (or press **Paste**).
+1. Switch to the **Downloader** tab, and paste one link per line (or press **Paste**). A link can leave off `https://`. YouTube links in any form (Shorts, `youtu.be`, `/live/`, embeds, the mobile and Music sites) are read as the plain video link, so the same video pasted twice shows once.
 2. Choose **MP4 Video** or **MP3 Audio**. For MP4, choose a quality from the tabs: it means "up to this", and a video without it downloads at the best it has. Tabs that none of the pasted links offer are greyed out, and if the quality you chose isn't offered a message says so (red for 4K, yellow for 1440p). Quality is measured by the shorter side, so a vertical Short is 1080p. The default is 1080p, and the format and quality are remembered.
-3. Each pasted link gets a row showing its site, title, length, the best quality on offer and whether it will be converted. Links are looked up three at a time, and download without a lookup if one is slow (a lookup gives up after 45 seconds).
+3. Each pasted link gets a row showing its site, title, length, the best quality on offer and whether it will be converted. Links are looked up three at a time, and download without a lookup if one is slow. A lookup first asks YouTube the quick way (up to 20 seconds), and if that fails for any reason asks the normal way (up to another 45 seconds).
 4. Press **Download** (⌘↩). Links download one at a time, shown as cards in the bin with a live line such as "Downloading video · 45% · 3.2 MB/s · 1:20 left" or "Converting to H.264 · 70%". **Stop** cancels and removes the partial file. A download that makes no progress for 60 seconds stops with a **Retry** button.
 5. Drag the finished card into ProPresenter. A video or audio card hands over the file itself.
 
