@@ -110,6 +110,17 @@ jobs:
             echo "yt-dlp start-up, run $run: $( { time "$TOOLS/yt-dlp" --ignore-config --list-extractors >/dev/null; } 2>&1 )"
           done
 
+      - name: Compare with the single-file yt-dlp (temporary, for the PR's evidence)
+        shell: bash
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/yt-dlp_macos" https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.21/yt-dlp_macos
+          echo "7a6fe71d7d680f1fb0ac18d4949873d77db2859e90017c0f44bd94b23be4ee40  $RUNNER_TEMP/yt-dlp_macos" | shasum -a 256 -c
+          chmod +x "$RUNNER_TEMP/yt-dlp_macos"
+          TIMEFORMAT='%Rs'
+          for run in 1 2 3; do
+            echo "single-file start-up, run $run: $( { time "$RUNNER_TEMP/yt-dlp_macos" --ignore-config --list-extractors >/dev/null; } 2>&1 )"
+          done
+
       - name: Test
         # `shell: bash` implies -eo pipefail. Without it the pipeline's exit
         # status is tee's (always 0), so a test target that fails to compile
