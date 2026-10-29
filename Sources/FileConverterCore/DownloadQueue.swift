@@ -77,9 +77,15 @@ public final class DownloadQueue: ObservableObject {
         _ progress: @escaping @Sendable (DownloadProgress) -> Void
     ) async throws -> URL
 
-    /// What the link box holds. Changing it looks up any new links.
+    /// What the link box holds, kept to one link per line. Changing it looks up
+    /// any new links.
     @Published public var linkText = "" {
-        didSet { if linkText != oldValue { lookUpNewLinks() } }
+        didSet {
+            // Assigning here doesn't run this observer again.
+            let tidied = DownloadLink.onePerLine(linkText)
+            if tidied != linkText { linkText = tidied }
+            if linkText != oldValue { lookUpNewLinks() }
+        }
     }
     @Published public private(set) var lookups: [String: LinkLookup] = [:]
 

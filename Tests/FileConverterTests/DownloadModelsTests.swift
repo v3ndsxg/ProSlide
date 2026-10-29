@@ -100,6 +100,42 @@ final class DownloadModelsTests: XCTestCase {
         XCTAssertEqual(links.map(\.text), [forms[0]], "one video pasted in many forms is one link")
     }
 
+    func testLinksPastedTogetherAreSplitOntoLinesOfTheirOwn() {
+        // What arrived on the Mac when links were copied out of an email.
+        let mangled = "https://www.youtube.com/watch?v=NQ5482dWQsw%0Ahttps://www.youtube.com/shorts/CJp7wR-8yZw%0A"
+            + "https://www.youtube.com/watch?v%3DNXH6r-DxHn8&list=RDNXH6r-DxHn8&start_radio=1"
+        XCTAssertEqual(DownloadLink.onePerLine(mangled), """
+        https://www.youtube.com/watch?v=NQ5482dWQsw
+        https://www.youtube.com/shorts/CJp7wR-8yZw
+        https://www.youtube.com/watch?v%3DNXH6r-DxHn8&list=RDNXH6r-DxHn8&start_radio=1
+        """)
+        XCTAssertEqual(DownloadLink.onePerLine("https://a.com/1https://b.com/2 https://c.com/3\thttps://d.com/4"),
+                       "https://a.com/1\nhttps://b.com/2\nhttps://c.com/3\nhttps://d.com/4")
+        XCTAssertEqual(DownloadLink.onePerLine("https://a.com/1%0d%0ahttps://b.com/2"), "https://a.com/1\nhttps://b.com/2")
+    }
+
+    func testALinkInsideAnotherOrATrailingSpaceIsLeftAlone() {
+        for text in [
+            "https://l.facebook.com/l.php?u=https://vimeo.com/1",
+            "https://web.archive.org/web/2020/https://vimeo.com/1",
+            "https://vimeo.com/1 ",
+            "https://vimeo.com/1\nhttps://vimeo.com/2",
+        ] {
+            XCTAssertEqual(DownloadLink.onePerLine(text), text)
+        }
+    }
+
+    func testAYouTubeLinkWhoseEqualsSignWasEncodedStillFindsItsVideo() {
+        for text in [
+            "https://www.youtube.com/watch?v%3DNXH6r-DxHn8&list=RDNXH6r-DxHn8&start_radio=1",
+            "https://www.youtube.com/watch?v=3DNXH6r-DxHn8&list=3DRDNXH6r-DxHn8",
+        ] {
+            let link = DownloadLink.classify(text)
+            XCTAssertTrue(link.isDownloadable, text)
+            XCTAssertEqual(link.url?.absoluteString, "https://www.youtube.com/watch?v=NXH6r-DxHn8", text)
+        }
+    }
+
     func testAYouTubeLinkWithAnOddIdIsLeftAsItWas() {
         let text = "https://www.youtube.com/watch?v=abc&list=PL123"
         XCTAssertEqual(DownloadLink.classify(text).url?.absoluteString, text, "yt-dlp decides what it means")
