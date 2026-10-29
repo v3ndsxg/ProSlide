@@ -9,7 +9,7 @@ fetch() { curl --fail --location --silent --show-error --proto '=https' --tlsv1.
 json() { python3 -I -c "import json,sys; print(json.load(sys.stdin)['$1'])"; }
 
 yt_tag="$(fetch https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest | json tag_name)"
-yt_sha="$(fetch "https://github.com/yt-dlp/yt-dlp/releases/download/$yt_tag/SHA2-256SUMS" | awk '$2 == "yt-dlp_macos" { print $1 }')"
+yt_sha="$(fetch "https://github.com/yt-dlp/yt-dlp/releases/download/$yt_tag/SHA2-256SUMS" | awk '$2 == "yt-dlp_macos.zip" { print $1 }')"
 
 deno_tag="$(fetch https://api.github.com/repos/denoland/deno/releases/latest | json tag_name)"
 deno_asset="deno-aarch64-apple-darwin.zip"
@@ -28,6 +28,6 @@ for value in "$yt_tag" "$yt_sha" "$deno_tag" "$deno_sha" "$ff_version" "$ff_sha"
 done
 
 printf '%-9s %-11s %-5s %s  %s\n' \
-    yt-dlp "$yt_tag" file "$yt_sha" "https://github.com/yt-dlp/yt-dlp/releases/download/$yt_tag/yt-dlp_macos" \
+    yt-dlp "$yt_tag" dir "$yt_sha" "https://github.com/yt-dlp/yt-dlp/releases/download/$yt_tag/yt-dlp_macos.zip" \
     ffmpeg "$ff_version" zip "$ff_sha" "$ff_url" \
     deno "${deno_tag#v}" zip "$deno_sha" "$deno_url"

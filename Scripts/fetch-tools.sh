@@ -47,6 +47,23 @@ while read -r name version kind expected url <&3; do
     case "$kind" in
         file) cp "$cached" "$DEST/$name" ;;
         zip)  unzip -o -q -j "$cached" "$name" -d "$DEST" ;;
+        dir)
+            # A zip of a whole program folder, as PyInstaller builds it: the
+            # program, named after the archive, and the `_internal` folder of
+            # libraries it loads from beside itself. Everything goes into DEST
+            # and the program is renamed to the tool's name; it finds
+            # `_internal` whatever it is called.
+            program="$(basename "$url" .zip)"
+            unpacked="$(mktemp -d)"
+            unzip -q "$cached" -d "$unpacked"
+            [ -f "$unpacked/$program" ] || { rm -rf "$unpacked"; die "$program not found in the archive for $name"; }
+            mv "$unpacked/$program" "$DEST/$name"
+            for entry in "$unpacked"/*; do
+                rm -rf "$DEST/$(basename "$entry")"
+                mv "$entry" "$DEST/"
+            done
+            rm -rf "$unpacked"
+            ;;
         *)    die "unknown kind '$kind' for $name in tools.lock" ;;
     esac
     chmod 755 "$DEST/$name"
