@@ -12,7 +12,7 @@
 #
 # The beta is a separate app: its own name, bundle ID, icon and Documents folder,
 # so it installs beside the production app and never touches its decks. This
-# branch builds the beta unless told otherwise (or PROSLIDE_VARIANT=stable).
+# branch builds the production app unless told otherwise (or PROSLIDE_VARIANT=beta).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,8 +21,8 @@ INSTALL_DIR="/Applications"
 VERSION="0.1.0"
 BUILD_NUMBER="1"
 
-# Branch default. This is the one line that differs from main ("stable" there).
-VARIANT="${PROSLIDE_VARIANT:-beta}"
+# Branch default. This is the one line that differs from beta ("beta" there).
+VARIANT="${PROSLIDE_VARIANT:-stable}"
 
 usage() {
     sed -n '2,14p' "${BASH_SOURCE[0]}" | cut -c 3-
