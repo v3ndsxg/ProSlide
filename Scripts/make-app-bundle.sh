@@ -6,42 +6,72 @@
 #   ./Scripts/make-app-bundle.sh                 # release build -> build/ProSlide.app
 #   ./Scripts/make-app-bundle.sh debug           # debug build
 #   ./Scripts/make-app-bundle.sh --install       # release build, then copy to /Applications
+#   ./Scripts/make-app-bundle.sh --stable        # build the production app (ProSlide)
+#   ./Scripts/make-app-bundle.sh --beta          # build the beta app (ProSlide Beta)
+#   ./Scripts/make-app-bundle.sh --no-tools      # skip the download tools (yt-dlp, ffmpeg, Deno)
+#
+# The beta is a separate app: its own name, bundle ID, icon and Documents folder,
+# so it installs beside the production app and never touches its decks. This
+# branch builds the production app unless told otherwise (or PROSLIDE_VARIANT=beta).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$ROOT/build/ProSlide.app"
-ICON_SRC="$ROOT/App/ProSlide/Assets.xcassets/AppIcon.appiconset/icon_1024.png"
 INSTALL_DIR="/Applications"
 
-# Kept in sync with the Xcode project's build settings.
-BUNDLE_ID="com.v3ndsxg.proslide"
 VERSION="0.1.0"
 BUILD_NUMBER="1"
 
+# Branch default. This is the one line that differs from beta ("beta" there).
+VARIANT="${PROSLIDE_VARIANT:-stable}"
+
 usage() {
-    sed -n '2,8p' "${BASH_SOURCE[0]}" | cut -c 3-
+    sed -n '2,14p' "${BASH_SOURCE[0]}" | cut -c 3-
 }
 
 die() { echo "error: $*" >&2; exit 1; }
 
 CONFIG="release"
 INSTALL=0
+WITH_TOOLS=1
 for arg in "$@"; do
     case "$arg" in
         release|Release)  CONFIG="release" ;;
         debug|Debug)      CONFIG="debug" ;;
         --install|-i)     INSTALL=1 ;;
+        --beta)           VARIANT="beta" ;;
+        --stable)         VARIANT="stable" ;;
+        --no-tools)       WITH_TOOLS=0 ;;
         -h|--help)        usage; exit 0 ;;
         -*)               die "unknown option '$arg' (try --help)" ;;
         *)                die "unexpected argument '$arg' (config must come first, e.g. '$arg --install')" ;;
     esac
 done
 
+case "$VARIANT" in
+    stable)
+        APP_NAME="ProSlide"
+        # Kept in sync with the Xcode project's build settings.
+        BUNDLE_ID="com.v3ndsxg.proslide"
+        DATA_FOLDER="ProSlide"
+        IS_BETA="false"
+        ICON_SRC="$ROOT/App/ProSlide/Assets.xcassets/AppIcon.appiconset/icon_1024.png"
+        ;;
+    beta)
+        APP_NAME="ProSlide Beta"
+        BUNDLE_ID="com.v3ndsxg.proslide.beta"
+        DATA_FOLDER="ProSlide Beta"
+        IS_BETA="true"
+        ICON_SRC="$ROOT/Scripts/beta-icon_1024.png"
+        ;;
+    *) die "unknown variant '$VARIANT' (use stable or beta)" ;;
+esac
+APP="$ROOT/build/$APP_NAME.app"
+
 [ "$(uname -s)" = "Darwin" ] || die "ProSlide.app can only be built on macOS"
 command -v swift >/dev/null || die "swift not found; install Xcode or the Command Line Tools"
 [ -f "$ROOT/Package.swift" ] || die "$ROOT/Package.swift not found"
 
-echo "Building ProSlide ($CONFIG)…"
+echo "Building $APP_NAME ($CONFIG)…"
 (cd "$ROOT" && swift build -c "$CONFIG")
 # tail -1 because a stray diagnostic on stdout would otherwise corrupt the path
 BIN_DIR="$(cd "$ROOT" && swift build -c "$CONFIG" --show-bin-path | tail -n 1)"
@@ -51,6 +81,17 @@ EXECUTABLE="$BIN_DIR/ProSlide"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$EXECUTABLE" "$APP/Contents/MacOS/ProSlide"
+
+# The Downloader's tools, pinned by checksum in Scripts/tools.lock. They are
+# fetched on this Mac and never committed. Their own signatures are left alone:
+# yt-dlp is ad-hoc signed upstream, and re-signing a PyInstaller program can
+# corrupt it. The app seal below covers them as resources. yt-dlp is its
+# unpacked build, so Tools also holds the `_internal` folder it loads from.
+if [ "$WITH_TOOLS" -eq 1 ] && [ -f "$ROOT/Scripts/tools.lock" ]; then
+    echo "Fetching the download tools (pinned in Scripts/tools.lock)…"
+    "$ROOT/Scripts/fetch-tools.sh" "$APP/Contents/Resources/Tools"
+    cp "$ROOT/Scripts/THIRD_PARTY_NOTICES.txt" "$APP/Contents/Resources/Tools/"
+fi
 
 # The icon comes from the same 1024px PNG the asset catalog uses. iconutil and
 # sips ship with macOS, so this needs no Xcode. A failure here is cosmetic --
@@ -84,7 +125,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>ProSlide</string>
+	<string>$APP_NAME</string>
 	<key>CFBundleExecutable</key>
 	<string>ProSlide</string>
 	<key>CFBundleIconFile</key>
@@ -94,7 +135,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>ProSlide</string>
+	<string>$APP_NAME</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -109,6 +150,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>ProSlideDataFolder</key>
+	<string>$DATA_FOLDER</string>
+	<key>ProSlideIsBeta</key>
+	<$IS_BETA/>
 </dict>
 </plist>
 PLIST
@@ -127,7 +172,7 @@ if command -v plutil >/dev/null; then
 fi
 
 if [ "$INSTALL" -eq 1 ]; then
-    DEST="$INSTALL_DIR/ProSlide.app"
+    DEST="$INSTALL_DIR/$APP_NAME.app"
     rm -rf "$DEST" 2>/dev/null || true
     # ditto is part of base macOS and preserves the signature; cp is only a
     # fallback so a missing ditto is not a mysterious "command not found".

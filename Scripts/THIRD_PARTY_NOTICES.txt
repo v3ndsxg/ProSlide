@@ -1,0 +1,26 @@
+Third-party programs packaged in this app (Contents/Resources/Tools)
+=====================================================================
+
+ProSlide starts these as separate programs. Each is the official or
+upstream-published build named in Scripts/tools.lock, checked against its
+SHA-256 before it is packaged. They are not part of ProSlide's MIT-licensed code.
+
+yt-dlp
+  Fetches the video and audio. The source is released into the public domain
+  (the Unlicense), but the downloadable program bundles code under the GNU
+  GPL v3 or later, and the combined program is licensed that way.
+  Source, license text and third-party notices: https://github.com/yt-dlp/yt-dlp
+
+FFmpeg
+  Merges, converts and extracts audio. This build, by Martin Riedl, is licensed
+  under the GNU GPL v3 or later and includes libraries such as x264, x265 and
+  LAME under their own licenses.
+  Build and source information: https://ffmpeg.martin-riedl.de/
+  FFmpeg itself: https://ffmpeg.org/
+
+Deno
+  A JavaScript runtime that yt-dlp needs to read YouTube pages. MIT License,
+  Copyright the Deno authors.
+  https://github.com/denoland/deno
+
+Only download videos you own or have permission to use.
