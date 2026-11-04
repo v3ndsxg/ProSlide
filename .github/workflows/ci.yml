@@ -45,9 +45,9 @@ jobs:
         # and is no longer built here; a hand-maintained pbxproj is exactly the
         # kind of file that breaks silently.
         #
-        # Both variants are built and checked: this branch's default (the beta)
-        # and the production app, so a change to the script can't quietly break
-        # the build that ships from main.
+        # Both variants are built and checked, each named explicitly so this
+        # file is the same on main and beta (only the script's default differs).
+        # The production app is built last; the two must sit side by side.
         run: |
           check_app() {
             local name="$1" id="$2" folder="$3" beta="$4"
@@ -71,7 +71,7 @@ jobs:
             du -sh "$APP"
           }
 
-          ./Scripts/make-app-bundle.sh release
+          ./Scripts/make-app-bundle.sh release --beta
           check_app "ProSlide Beta" com.v3ndsxg.proslide.beta "ProSlide Beta" true
 
           ./Scripts/make-app-bundle.sh release --stable
@@ -85,7 +85,7 @@ jobs:
         # touches the internet; the tools only look at files and run code locally.
         shell: bash
         run: |
-          TOOLS="$PWD/build/ProSlide Beta.app/Contents/Resources/Tools"
+          TOOLS="$PWD/build/ProSlide.app/Contents/Resources/Tools"
 
           pinned() { awk -v n="$1" '$1 == n { print $2 }' Scripts/tools.lock; }
           got="$("$TOOLS/yt-dlp" --version)"
@@ -123,7 +123,7 @@ jobs:
         env:
           FILE_CONVERTER_ARTIFACTS: ${{ runner.temp }}/test-artifacts
           # Lets RealToolsTests run the engine against the packaged tools.
-          PROSLIDE_TOOLS_DIR: ${{ github.workspace }}/build/ProSlide Beta.app/Contents/Resources/Tools
+          PROSLIDE_TOOLS_DIR: ${{ github.workspace }}/build/ProSlide.app/Contents/Resources/Tools
         run: |
           mkdir -p "$FILE_CONVERTER_ARTIFACTS"
           swift test 2>&1 | tee "$FILE_CONVERTER_ARTIFACTS/test-output.txt"
