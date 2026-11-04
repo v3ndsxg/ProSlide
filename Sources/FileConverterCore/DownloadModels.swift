@@ -243,7 +243,7 @@ public enum DownloadError: Error, Equatable, LocalizedError {
         case .noOutput:
             "The download finished but produced no file."
         case .toolFailed(let detail):
-            "The download failed. The site may have changed; check for a ProSlide Beta update. \(detail)"
+            "The download failed. The site may have changed; check for a ProSlide update. \(detail)"
         }
     }
 
