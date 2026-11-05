@@ -13,3 +13,4 @@ xcuserdata/
 *.moved-aside
 
 .DS_Store
+__pycache__/

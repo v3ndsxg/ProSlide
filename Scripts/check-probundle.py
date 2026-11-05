@@ -18,6 +18,10 @@ It checks:
 - The layout: one `<Name>.pro` at the root, and only JPEGs under
   `Media/Assets/`.
 - The images: each one is a complete JPEG with a real size.
+- A lyrics bundle (a `.pro` and nothing else, as the Lyrics Formatter writes):
+  each cue is one text slide whose RTF parses, and whose text attributes cover
+  exactly its text; every cue is in one group, and the arrangement names only
+  groups that exist.
 - The `.pro`: it decodes, it is named after its file, and every UUID in it is
   well formed and unique. The cue group lists the cues in their own order.
   Each cue holds a slide action and a foreground media action, and the media
@@ -230,7 +234,10 @@ def check(path):
                 problems.append(f"{name}: not a JPEG")
             else:
                 images[name] = None
-        if not images:
+        # A bundle with nothing but its manifest is a lyrics bundle: text slides
+        # have no media.
+        lyrics = len(names) == 1
+        if not images and not lyrics:
             problems.append(f"no images under {MEDIA_FOLDER}/")
 
         # The images.
@@ -249,7 +256,10 @@ def check(path):
             problems.append(f"{manifest_name}: unreadable: {error}")
             return problems, f"{len(images)} images"
         try:
-            slides = check_manifest(raw, manifest_name, images, problems)
+            if lyrics:
+                slides = check_lyrics_manifest(raw, manifest_name, problems)
+            else:
+                slides = check_manifest(raw, manifest_name, images, problems)
         except (Malformed, UnicodeDecodeError, struct.error) as error:
             problems.append(f"{manifest_name}: does not decode: {error}")
             slides = 0
@@ -363,6 +373,171 @@ def check_manifest(raw, manifest_name, images, problems):
     for path in images:
         if path not in referenced:
             problems.append(f"{path}: in the bundle but no cue shows it")
+    seen = set()
+    for value in uuids:
+        if value and value in seen:
+            problems.append(f"UUID {value} is used more than once")
+        seen.add(value)
+    return len(cues)
+
+
+# MARK: - Lyrics bundles
+
+
+def rtf_text(rtf):
+    """The text an RTF document shows, as the Lyrics Formatter writes it: one
+    paragraph at the top level, line breaks as a backslash before a newline,
+    and anything beyond ASCII as \\uN. Text inside nested groups (the font and
+    colour tables) is not shown, so it is skipped."""
+    if not rtf.startswith("{\\rtf1"):
+        raise Malformed("the text is not RTF")
+    text = []
+    depth = 0
+    position = 0
+    while position < len(rtf):
+        character = rtf[position]
+        if character == "{":
+            depth += 1
+            position += 1
+        elif character == "}":
+            depth -= 1
+            position += 1
+            if depth < 0:
+                raise Malformed("the RTF closes more groups than it opens")
+        elif character == "\\":
+            following = rtf[position + 1:position + 2]
+            if following in ("\\", "{", "}"):
+                if depth == 1:
+                    text.append(following)
+                position += 2
+            elif following == "\n":
+                if depth == 1:
+                    text.append("\n")
+                position += 2
+            else:
+                match = re.match(r"\\(\*|[a-zA-Z]+)(-?\d+)? ?", rtf[position:])
+                if not match:
+                    raise Malformed(f"unreadable RTF control at {position}")
+                word, number = match.group(1), match.group(2)
+                if word == "u" and number is not None and depth == 1:
+                    text.append(chr(int(number) % 65536))
+                position += match.end()
+        elif character in "\r\n":
+            position += 1
+        else:
+            if depth == 1:
+                text.append(character)
+            position += 1
+    if depth != 0:
+        raise Malformed("the RTF leaves a group open")
+    return "".join(text)
+
+
+def check_lyrics_manifest(raw, manifest_name, problems):
+    """Checks a lyrics bundle's `rv.data.Presentation` and returns its cue count."""
+    for leak in MACHINE_PATHS:
+        if leak in raw:
+            problems.append(f"{manifest_name}: contains {leak.decode()!r}, a path on the machine that built it")
+
+    document = Message(raw)
+    uuids = []
+
+    def uuid(message, where, unique=True):
+        value = message.string(1) if message else ""
+        if not UUID.match(value):
+            problems.append(f"{where}: {value!r} is not an uppercase UUID")
+        if unique:
+            uuids.append(value)
+        return value
+
+    stem = PurePosixPath(manifest_name).stem
+    uuid(document.message(2), "presentation")
+    if document.string(3) != stem:
+        problems.append(f"presentation is named {document.string(3)!r} but its file is {manifest_name!r}")
+
+    cues = document.messages(13)
+    if not cues:
+        problems.append("presentation has no cues")
+    cue_uuids = [uuid(cue.message(1), f"cue {index + 1}") for index, cue in enumerate(cues)]
+
+    for index, cue in enumerate(cues, start=1):
+        where = f"cue {index}"
+        if not cue.uint(12):
+            problems.append(f"{where}: disabled")
+        actions = cue.messages(10)
+        kinds = [action.uint(9) for action in actions]
+        if kinds != [ACTION_PRESENTATION_SLIDE]:
+            problems.append(f"{where}: actions are {kinds}, expected one text slide {[ACTION_PRESENTATION_SLIDE]}")
+            continue
+        action = actions[0]
+        uuid(action.message(1), f"{where} slide action")
+        if not action.uint(6):
+            problems.append(f"{where}: slide action disabled")
+        base = action.message(23, 2, 1)
+        if base is None:
+            problems.append(f"{where}: no slide")
+            continue
+        canvas = base.message(6)
+        if not canvas or canvas.double(1) <= 0 or canvas.double(2) <= 0:
+            problems.append(f"{where}: the slide has no size")
+        uuid(base.message(7), f"{where} canvas")
+        elements = base.messages(1)
+        if not elements:
+            problems.append(f"{where}: the slide holds no text box")
+        for element in elements:
+            graphics = element.message(1)
+            if graphics is None:
+                problems.append(f"{where}: an empty slide element")
+                continue
+            # ProPresenter's own exports give a template's text box the same
+            # identifier on every slide, so these need not be unique.
+            uuid(graphics.message(1), f"{where} text box", unique=False)
+            text = graphics.message(13)
+            if text is None or not text.all(5):
+                problems.append(f"{where}: the text box has no text")
+                continue
+            try:
+                shown = rtf_text(text.all(5)[0].decode("latin-1"))
+            except Malformed as error:
+                problems.append(f"{where}: {error}")
+                continue
+            length = len(shown.encode("utf-16-le")) // 2
+            attributes = text.message(3)
+            ranges = [custom.message(1).uint(2) if custom.message(1) else 0
+                      for custom in (attributes.messages(13) if attributes else [])]
+            if length and not ranges:
+                problems.append(f"{where}: {shown!r} has no text attributes")
+            for end in ranges:
+                if end != length:
+                    problems.append(f"{where}: text attributes cover {end} characters, but the text {shown!r} has {length}")
+
+    groups = document.messages(12)
+    if not groups:
+        problems.append("no groups")
+    group_uuids = set()
+    grouped = []
+    for group in groups:
+        group_uuids.add(uuid(group.message(1, 1), "group"))
+        name = group.message(1).string(2) if group.message(1) else ""
+        if not name:
+            problems.append("a group has no name")
+        grouped.extend(identifier.string(1) for identifier in group.messages(2))
+    for cue_uuid in cue_uuids:
+        count = grouped.count(cue_uuid)
+        if count != 1:
+            problems.append(f"cue {cue_uuid} is in {count} groups, not one")
+    for listed in grouped:
+        if listed not in cue_uuids:
+            problems.append(f"a group lists {listed}, which is not a cue")
+
+    for arrangement in document.messages(11):
+        uuid(arrangement.message(1), f"arrangement {arrangement.string(2)!r}")
+        for identifier in arrangement.messages(3):
+            if identifier.string(1) not in group_uuids:
+                problems.append(f"arrangement {arrangement.string(2)!r} names {identifier.string(1)}, which is not a group")
+
+    # Groups are named by every arrangement that repeats them, so only the
+    # presentation's own identifiers must be unique.
     seen = set()
     for value in uuids:
         if value and value in seen:

@@ -54,6 +54,29 @@ public enum LyricsSectionKind: String, Sendable, CaseIterable {
     }
 }
 
+extension LyricsSection {
+    /// A short name for the bin card's summary: "V1", "C", "PC", "B".
+    public var shortName: String {
+        let number = name.filter(\.isNumber)
+        let letters: String
+        switch kind {
+        case .verse: letters = "V"
+        case .preChorus: letters = "PC"
+        case .chorus: letters = "C"
+        case .bridge: letters = "B"
+        case .tag: letters = "T"
+        case .intro: letters = "I"
+        case .outro: letters = "O"
+        case .interlude: letters = "IL"
+        case .ending: letters = "E"
+        case .vamp: letters = "VP"
+        case .turnaround: letters = "TA"
+        case .other: letters = name.first.map { String($0).uppercased() } ?? "?"
+        }
+        return letters + number
+    }
+}
+
 /// One slide: the lines shown together on screen.
 public struct LyricsSlide: Equatable, Sendable {
     public let lines: [String]
@@ -82,9 +105,14 @@ public struct ParsedLyrics: Equatable, Sendable {
     public let foundLabels: Bool
     /// Lines that came before the first label and so were left out.
     public let droppedLineCount: Int
+    /// The sections in the order the lyrics name them, as section ids. A bare
+    /// repeated label ("Chorus:2x" with nothing under it) names the latest
+    /// section with that label again; a label with nothing to show is left out.
+    /// Repeat markers don't repeat a section here.
+    public let order: [Int]
 
     public static let empty = ParsedLyrics(
-        sections: [], artist: nil, ccliNumber: nil, foundLabels: false, droppedLineCount: 0
+        sections: [], artist: nil, ccliNumber: nil, foundLabels: false, droppedLineCount: 0, order: []
     )
 
     public var slideCount: Int { sections.reduce(0) { $0 + $1.slides.count } }
@@ -103,6 +131,8 @@ public struct ParsedLyrics: Equatable, Sendable {
 ///   its parts, a spaced dash becomes a space, and every character other than
 ///   letters, digits, spaces, commas and apostrophes goes. Capitalisation is
 ///   left exactly as pasted.
+/// - A line starting in lowercase joins the line above it, since it was a
+///   long line cut in two when it was copied.
 /// - Blank lines split slides. A longer block is split evenly into slides of at
 ///   most `linesPerSlide` lines, so five lines at four per slide are 3 + 2.
 /// - A section repeated word for word, or a label repeated with nothing under
@@ -163,7 +193,7 @@ public enum LyricsParser {
                 endSection()
                 current = label
                 foundLabels = true
-                bracketDepth = 0
+                bracketDepth = label.openBrackets
                 continue
             }
             guard current != nil else {
@@ -171,7 +201,14 @@ public enum LyricsParser {
                 continue
             }
             let cleaned = clean(line, bracketDepth: &bracketDepth)
-            if !cleaned.isEmpty { block.append(cleaned) }
+            guard !cleaned.isEmpty else { continue }
+            // A line starting in lowercase is the end of the one above, cut
+            // off by the width of whatever it was copied from: "…за Вселенну" / "всю?".
+            if let first = cleaned.first, first.isLowercase, let last = block.indices.last {
+                block[last] += " " + cleaned
+            } else {
+                block.append(cleaned)
+            }
         }
         endSection()
 
@@ -180,7 +217,8 @@ public enum LyricsParser {
             artist: footer.artist,
             ccliNumber: footer.ccliNumber,
             foundLabels: foundLabels,
-            droppedLineCount: dropped
+            droppedLineCount: dropped,
+            order: builder.order
         )
     }
 
@@ -206,6 +244,7 @@ public enum LyricsParser {
             text = text.replacingOccurrences(of: apostrophe, with: "'")
         }
         text = text.replacingMatches(of: Pattern.repeatMarker, with: " ")
+        text = text.replacingMatches(of: Pattern.trailingCount, with: "")
         text = text.replacingMatches(of: Pattern.hyphenInWord, with: "")
         text = text.replacingMatches(of: Pattern.dash, with: " ")
         text = text.replacingMatches(of: Pattern.notKept, with: " ")
@@ -223,9 +262,13 @@ public enum LyricsParser {
     private static let apostrophes = ["\u{2019}", "\u{2018}", "\u{02BC}", "\u{0060}", "\u{00B4}", "\u{2032}"]
 
     enum Pattern {
-        /// `x2`, `X 2`, `2x`, `×3`, and the Cyrillic `х2` that Ukrainian and
-        /// Russian lyrics use, standing apart from any word.
-        static let repeatMarker = regex(#"(?<![\p{L}\p{N}])(?:[xXхХ×]\s?\d+|\d+\s?[xXхХ×])(?![\p{L}\p{N}])"#)
+        /// `x2`, `X 2`, `2x`, `×3`, the Cyrillic `х2`, and `3р.` or `2 рази`
+        /// ("times"), standing apart from any word.
+        static let repeatMarker = regex(
+            #"(?<![\p{L}\p{N}])(?:[xXхХ×]\s?\d+|\d+\s?(?:[xXхХ×]|р(?:аз[аи]?)?\.?))(?![\p{L}\p{N}])"#
+        )
+        /// A count after a dash at the end of a line: "The Name above all-3".
+        static let trailingCount = regex(#"\s?[-\u2010-\u2015]\s?\d+\s*$"#)
         /// A hyphen between letters: `Hal-le-lu-jah`.
         static let hyphenInWord = regex(#"(?<=[\p{L}\p{M}])[-‐‑](?=\p{L})"#)
         /// Any dash left over, such as one between phrases.
@@ -243,45 +286,70 @@ public enum LyricsParser {
     struct Label: Equatable {
         let name: String
         let kind: LyricsSectionKind
+        /// Brackets a note after the label opened and didn't close, as in
+        /// `БРІДЖ:3р.(1-тихо(дів.)2-голосніше`. The lyric lines go on removing
+        /// text until they close, so a note wrapped onto the next line goes too.
+        var openBrackets = 0
 
         /// The label a line holds, or nil if it is a lyric.
         static func read(_ line: String) -> Label? {
-            var text = line
-            var bracketed = false
-            if let match = Pattern.bracketed.firstGroup(in: text) {
-                text = match
-                bracketed = true
-            }
-            var colon = false
-            while let last = text.last, ":-\u{2013}\u{2014} \t".contains(last) {
-                if last == ":" { colon = true }
-                text.removeLast()
-            }
-            // "Chorus (x2)", "Chorus x2".
-            text = text.replacingMatches(of: Pattern.parenthesised, with: " ")
-            text = text.replacingMatches(of: LyricsParser.Pattern.repeatMarker, with: " ")
-            text = text.replacingMatches(of: LyricsParser.Pattern.spaces, with: " ")
-                .trimmingCharacters(in: .whitespaces)
-            guard !text.isEmpty else { return nil }
-
-            if let groups = Pattern.shortForm.groups(in: text), let kind = shortForms[groups[0]] {
-                return Label(name: name(kind.englishName, number: groups[1]), kind: kind)
-            }
-            if let groups = Pattern.wordAndNumber.groups(in: text) {
-                let word = groups[0]
-                let key = word.lowercased().filter { !" -\u{2010}\u{2011}.".contains($0) }
-                if let kind = vocabulary[key] {
-                    let isEnglish = word.contains { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }
-                    return Label(name: name(isEnglish ? kind.englishName : tidyCase(word), number: groups[1]), kind: kind)
+            // A known label, a colon, then a note for the band or singers:
+            // "Chorus:2x", "КУПЛЕТ 1:(соло)", "Програш:G". The note is dropped.
+            if let colon = line.firstIndex(of: ":") {
+                let note = line[line.index(after: colon)...]
+                if note.contains(where: { !$0.isWhitespace }), let label = known(String(line[..<colon])) {
+                    var opened = 0
+                    for character in note {
+                        if character == "(" || character == "[" { opened += 1 }
+                        if character == ")" || character == "]" { opened = max(opened - 1, 0) }
+                    }
+                    return Label(name: label.name, kind: label.kind, openBrackets: opened)
                 }
             }
+            if let label = known(line) { return label }
+
             // An unknown label: short, alone, and marked as a label by brackets
             // or a colon. A bare word stays a lyric; it could be a real line.
+            let bracketed = Pattern.bracketed.matches(line)
+            let colon = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t-\u{2013}\u{2014}")).hasSuffix(":")
+            let text = stripped(line)
             let words = text.split(separator: " ")
-            if (bracketed || colon), words.count <= 3, !text.contains(","), text.contains(where: \.isLetter) {
+            if (bracketed || colon), !words.isEmpty, words.count <= 3, !text.contains(","), text.contains(where: \.isLetter) {
                 return Label(name: tidyCase(text) + ":", kind: .other)
             }
             return nil
+        }
+
+        /// The line as a known label, or nil.
+        private static func known(_ line: String) -> Label? {
+            let text = stripped(line)
+            guard !text.isEmpty else { return nil }
+            if let groups = Pattern.shortForm.groups(in: text), let kind = shortForms[groups[0]] {
+                return Label(name: name(kind.englishName, number: groups[1]), kind: kind)
+            }
+            // "1 Verse" as well as "Verse 1".
+            guard let groups = Pattern.numberAndWord.groups(in: text).map({ [$0[1], $0[0]] })
+                ?? Pattern.wordAndNumber.groups(in: text) else { return nil }
+            let word = groups[0], number = groups[1]
+            let key = word.lowercased().filter { !" -\u{2010}\u{2011}.".contains($0) }
+            guard let kind = vocabulary[key] else { return nil }
+            let isEnglish = word.contains { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }
+            let display = isEnglish && kind != .other ? kind.englishName : tidyCase(word)
+            return Label(name: name(display, number: number), kind: kind)
+        }
+
+        /// The label's words alone: without the brackets around it, a colon or
+        /// dash after it, and repeat markers such as "(x2)" or "x2".
+        private static func stripped(_ line: String) -> String {
+            var text = line.trimmingCharacters(in: .whitespaces)
+            if let inside = Pattern.bracketed.firstGroup(in: text) { text = inside }
+            while let last = text.last, ":-\u{2013}\u{2014} \t".contains(last) {
+                text.removeLast()
+            }
+            text = text.replacingMatches(of: Pattern.parenthesised, with: " ")
+            text = text.replacingMatches(of: LyricsParser.Pattern.repeatMarker, with: " ")
+            return text.replacingMatches(of: LyricsParser.Pattern.spaces, with: " ")
+                .trimmingCharacters(in: .whitespaces)
         }
 
         private static func name(_ word: String, number: String) -> String {
@@ -316,6 +384,8 @@ public enum LyricsParser {
                 (.ending, ["ending", "концовка", "кінцівка", "окончание", "закінчення", "завершение", "завершення"]),
                 (.vamp, ["vamp", "вамп"]),
                 (.turnaround, ["turnaround"]),
+                // Planning Center's own catch-all section.
+                (.other, ["misc"]),
             ]
             var vocabulary: [String: LyricsSectionKind] = [:]
             for (kind, list) in words {
@@ -332,6 +402,8 @@ public enum LyricsParser {
             static let shortForm = regex(#"^(PC|V|C|B)\s?(\d{0,2})$"#)
             /// "Verse 1", "Pre-Chorus", "Куплет 2".
             static let wordAndNumber = regex(#"^(.*?\S)\s*(\d{1,2})?$"#)
+            /// "1 Verse", "2 Куплет".
+            static let numberAndWord = regex(#"^(\d{1,2})\s*(\D.*)$"#)
         }
     }
 
@@ -341,24 +413,37 @@ public enum LyricsParser {
     struct SectionBuilder {
         let linesPerSlide: Int
         private(set) var sections: [LyricsSection] = []
-        /// For each label (lowercased, no colon), the words of every section
-        /// that has used it, so a repeat can be recognised.
-        private var seen: [String: [[String]]] = [:]
+        private(set) var order: [Int] = []
+        /// For each label (lowercased, no colon), the words and id of every
+        /// section that has used it, so a repeat can be recognised.
+        private var seen: [String: [(words: [String], id: Int)]] = [:]
+        /// For each label, the section it last named.
+        private var latest: [String: Int] = [:]
 
         init(linesPerSlide: Int) {
             self.linesPerSlide = linesPerSlide
         }
 
         mutating func add(_ label: Label, blocks: [[String]]) {
-            // A bare label ("Chorus" with nothing under it) repeats a section,
-            // and a label with no lyrics at all ("[Instrumental]") has nothing to show.
-            guard !blocks.isEmpty else { return }
-            let words = blocks.flatMap { $0 }
             let base = String(label.name.dropLast())
             let key = base.lowercased()
+            // A bare label ("Chorus" with nothing under it) repeats a section,
+            // and a label with no lyrics at all ("[Instrumental]") has nothing to show.
+            guard !blocks.isEmpty else {
+                if let id = latest[key] { order.append(id) }
+                return
+            }
+            let words = blocks.flatMap { $0 }
             let earlier = seen[key, default: []]
-            if earlier.contains(words) { return }
-            seen[key, default: []].append(words)
+            if let repeated = earlier.first(where: { $0.words == words }) {
+                latest[key] = repeated.id
+                order.append(repeated.id)
+                return
+            }
+            let id = sections.count
+            seen[key, default: []].append((words, id))
+            latest[key] = id
+            order.append(id)
 
             var name = label.name
             if !earlier.isEmpty {
@@ -369,7 +454,7 @@ public enum LyricsParser {
                 name = endsInNumber ? "\(base) (\(count)):" : "\(base) \(count):"
             }
             let slides = blocks.flatMap { LyricsParser.slides(from: $0, linesPerSlide: linesPerSlide) }
-            sections.append(LyricsSection(id: sections.count, name: name, kind: label.kind, slides: slides))
+            sections.append(LyricsSection(id: id, name: name, kind: label.kind, slides: slides))
         }
     }
 
