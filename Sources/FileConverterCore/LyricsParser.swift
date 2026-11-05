@@ -54,6 +54,29 @@ public enum LyricsSectionKind: String, Sendable, CaseIterable {
     }
 }
 
+extension LyricsSection {
+    /// A short name for the bin card's summary: "V1", "C", "PC", "B".
+    public var shortName: String {
+        let number = name.filter(\.isNumber)
+        let letters: String
+        switch kind {
+        case .verse: letters = "V"
+        case .preChorus: letters = "PC"
+        case .chorus: letters = "C"
+        case .bridge: letters = "B"
+        case .tag: letters = "T"
+        case .intro: letters = "I"
+        case .outro: letters = "O"
+        case .interlude: letters = "IL"
+        case .ending: letters = "E"
+        case .vamp: letters = "VP"
+        case .turnaround: letters = "TA"
+        case .other: letters = name.first.map { String($0).uppercased() } ?? "?"
+        }
+        return letters + number
+    }
+}
+
 /// One slide: the lines shown together on screen.
 public struct LyricsSlide: Equatable, Sendable {
     public let lines: [String]
@@ -82,9 +105,14 @@ public struct ParsedLyrics: Equatable, Sendable {
     public let foundLabels: Bool
     /// Lines that came before the first label and so were left out.
     public let droppedLineCount: Int
+    /// The sections in the order the lyrics name them, as section ids. A bare
+    /// repeated label ("Chorus:2x" with nothing under it) names the latest
+    /// section with that label again; a label with nothing to show is left out.
+    /// Repeat markers don't repeat a section here.
+    public let order: [Int]
 
     public static let empty = ParsedLyrics(
-        sections: [], artist: nil, ccliNumber: nil, foundLabels: false, droppedLineCount: 0
+        sections: [], artist: nil, ccliNumber: nil, foundLabels: false, droppedLineCount: 0, order: []
     )
 
     public var slideCount: Int { sections.reduce(0) { $0 + $1.slides.count } }
@@ -189,7 +217,8 @@ public enum LyricsParser {
             artist: footer.artist,
             ccliNumber: footer.ccliNumber,
             foundLabels: foundLabels,
-            droppedLineCount: dropped
+            droppedLineCount: dropped,
+            order: builder.order
         )
     }
 
@@ -384,24 +413,37 @@ public enum LyricsParser {
     struct SectionBuilder {
         let linesPerSlide: Int
         private(set) var sections: [LyricsSection] = []
-        /// For each label (lowercased, no colon), the words of every section
-        /// that has used it, so a repeat can be recognised.
-        private var seen: [String: [[String]]] = [:]
+        private(set) var order: [Int] = []
+        /// For each label (lowercased, no colon), the words and id of every
+        /// section that has used it, so a repeat can be recognised.
+        private var seen: [String: [(words: [String], id: Int)]] = [:]
+        /// For each label, the section it last named.
+        private var latest: [String: Int] = [:]
 
         init(linesPerSlide: Int) {
             self.linesPerSlide = linesPerSlide
         }
 
         mutating func add(_ label: Label, blocks: [[String]]) {
-            // A bare label ("Chorus" with nothing under it) repeats a section,
-            // and a label with no lyrics at all ("[Instrumental]") has nothing to show.
-            guard !blocks.isEmpty else { return }
-            let words = blocks.flatMap { $0 }
             let base = String(label.name.dropLast())
             let key = base.lowercased()
+            // A bare label ("Chorus" with nothing under it) repeats a section,
+            // and a label with no lyrics at all ("[Instrumental]") has nothing to show.
+            guard !blocks.isEmpty else {
+                if let id = latest[key] { order.append(id) }
+                return
+            }
+            let words = blocks.flatMap { $0 }
             let earlier = seen[key, default: []]
-            if earlier.contains(words) { return }
-            seen[key, default: []].append(words)
+            if let repeated = earlier.first(where: { $0.words == words }) {
+                latest[key] = repeated.id
+                order.append(repeated.id)
+                return
+            }
+            let id = sections.count
+            seen[key, default: []].append((words, id))
+            latest[key] = id
+            order.append(id)
 
             var name = label.name
             if !earlier.isEmpty {
@@ -412,7 +454,7 @@ public enum LyricsParser {
                 name = endsInNumber ? "\(base) (\(count)):" : "\(base) \(count):"
             }
             let slides = blocks.flatMap { LyricsParser.slides(from: $0, linesPerSlide: linesPerSlide) }
-            sections.append(LyricsSection(id: sections.count, name: name, kind: label.kind, slides: slides))
+            sections.append(LyricsSection(id: id, name: name, kind: label.kind, slides: slides))
         }
     }
 

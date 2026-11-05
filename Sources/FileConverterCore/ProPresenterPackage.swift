@@ -11,8 +11,9 @@ import ImageIO
 /// any machine and after the bin is cleared: on import ProPresenter copies the
 /// images into its own media store, with media management on or off.
 ///
-/// ProSlide never reads, writes or deletes anything in ProPresenter's own
-/// folders. The bundle is the whole hand-over.
+/// ProSlide never writes or deletes anything in ProPresenter's own folders.
+/// The bundle is the whole hand-over. (The Lyrics Formatter may read the
+/// presentation names in a library folder the operator chose; see `LyricsPackage`.)
 ///
 /// The bundle is written to `destinationDirectory` — the bin's `Pro` folder —
 /// not into the deck's own folder. ProPresenter imports a folder containing a

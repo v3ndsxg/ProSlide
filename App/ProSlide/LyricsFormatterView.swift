@@ -1,10 +1,22 @@
 import FileConverterCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The Lyrics Formatter tab: the song's details across the top, the pasted
 /// lyrics on the left, and the slides they make on the right.
 struct LyricsFormatterView: View {
     @EnvironmentObject private var draft: LyricsDraft
+    @EnvironmentObject private var queue: ConversionQueue
+    /// The operator's ProPresenter library, if chosen. Only the names of the
+    /// presentations in it are read, to keep a new song from taking one.
+    @AppStorage("proPresenterLibraryPath") private var libraryPath = ""
+    @State private var choosingLibrary = false
+    @State private var outcome: Outcome?
+
+    private enum Outcome: Equatable {
+        case saved(String)
+        case failed(String)
+    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -13,16 +25,58 @@ struct LyricsFormatterView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            details
+            VStack(spacing: 6) {
+                details
+                libraryRow
+            }
             HStack(alignment: .top, spacing: 16) {
                 pastePane
                 previewPane
             }
             .frame(maxHeight: .infinity)
+            outcomeLine
             footer
         }
         .padding(28)
         .frame(maxWidth: .infinity)
+        .fileImporter(isPresented: $choosingLibrary, allowedContentTypes: [.folder]) { picked in
+            if case .success(let url) = picked { libraryPath = url.path }
+        }
+        // A result describes the song just saved; editing starts the next one.
+        .onChange(of: draft.lyrics) { _ in outcome = nil }
+        .onChange(of: draft.title) { _ in outcome = nil }
+    }
+
+    @ViewBuilder
+    private var outcomeLine: some View {
+        switch outcome {
+        case .saved(let text):
+            Label(text, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .failed(let text):
+            Label(text, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private var libraryURL: URL? {
+        libraryPath.isEmpty ? nil : URL(fileURLWithPath: libraryPath, isDirectory: true)
+    }
+
+    private func create() {
+        let song = draft.song
+        do {
+            let saved = try queue.addSong(song, libraryFolder: libraryURL)
+            outcome = .saved(saved.wasRenamed
+                ? "Saved as \u{201C}\(saved.name)\u{201D} in the bin, because \u{201C}\(song.title)\u{201D} is already taken."
+                : "Saved \u{201C}\(saved.name)\u{201D} in the bin. Drag its card into ProPresenter.")
+        } catch {
+            outcome = .failed(error.localizedDescription)
+        }
     }
 
     // MARK: - Song details
@@ -146,12 +200,30 @@ struct LyricsFormatterView: View {
             Spacer()
             Button("Clear") { draft.clear() }
                 .disabled(draft.lyrics.isEmpty && draft.title.isEmpty && draft.artist.isEmpty && draft.ccliNumber.isEmpty)
-            Button("Create Presentation") {}
+            Button("Create Presentation") { create() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(true)
-                .help("Coming soon: making the ProPresenter presentation.")
+                .disabled(!draft.isReady)
+                .help(draft.isReady ? "Save this song in the bin as a ProPresenter presentation." : "Needs a song title and at least one slide.")
         }
+    }
+
+    /// Where duplicate titles are checked, beside the details.
+    private var libraryRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "books.vertical").foregroundStyle(.secondary)
+            if let libraryURL {
+                Text("Titles are checked against your ProPresenter library \u{201C}\(libraryURL.lastPathComponent)\u{201D}.")
+                Button("Change\u{2026}") { choosingLibrary = true }.buttonStyle(.link)
+                Button("Stop checking") { libraryPath = "" }.buttonStyle(.link)
+            } else {
+                Text("Titles are checked against the bin only.")
+                Button("Choose ProPresenter library\u{2026}") { choosingLibrary = true }.buttonStyle(.link)
+            }
+            Spacer()
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     private var summary: String {

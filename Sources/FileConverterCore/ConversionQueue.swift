@@ -28,6 +28,7 @@ public final class ConversionQueue: ObservableObject {
     @Published public private(set) var items: [ConversionQueueItem] = []
     @Published public private(set) var groups: [ConversionGroup] = []
     @Published public private(set) var downloads: [MediaItem] = []
+    @Published public private(set) var songs: [LyricsItem] = []
     @Published public private(set) var progress: Double = 0
     @Published public private(set) var isConverting = false
     @Published public var message: String?
@@ -56,6 +57,7 @@ public final class ConversionQueue: ObservableObject {
     public let binRootURL: URL
     public let binPresentationsURL: URL
     public let binDownloadsURL: URL
+    public let binLyricsURL: URL
 
     /// The old bin location to bring decks across from, or nil not to look.
     private let legacyBinURL: URL?
@@ -101,7 +103,8 @@ public final class ConversionQueue: ObservableObject {
         binRoot: URL = BinStorage.rootURL,
         presentationsDirectory: URL = BinStorage.presentationsDirectory,
         legacyBin: URL? = AppIdentity.current.ownsLegacyBin ? BinStorage.legacyRootURL : nil,
-        downloadsDirectory: URL? = nil
+        downloadsDirectory: URL? = nil,
+        lyricsDirectory: URL? = nil
     ) {
         self.options = options
         self.convertOne = convert
@@ -111,6 +114,7 @@ public final class ConversionQueue: ObservableObject {
         self.binRootURL = binRoot
         self.binPresentationsURL = presentationsDirectory
         self.binDownloadsURL = downloadsDirectory ?? BinStorage.downloadsDirectory(besideBin: binRoot)
+        self.binLyricsURL = lyricsDirectory ?? BinStorage.lyricsDirectory(besideBin: binRoot)
         self.legacyBinURL = legacyBin
     }
 
@@ -301,16 +305,18 @@ public final class ConversionQueue: ObservableObject {
         let root = binRootURL
         let legacy = legacyBinURL
         let downloadsURL = binDownloadsURL
+        let lyricsURL = binLyricsURL
         Task { [weak self] in
-            let (scanned, media) = await Task.detached(priority: .utility) { () -> ([ConversionGroup], [MediaItem]) in
+            let (scanned, media, songs) = await Task.detached(priority: .utility) { () -> ([ConversionGroup], [MediaItem], [LyricsItem]) in
                 // Before the first scan of a fresh bin, bring across anything
                 // left in the old Application Support location, where
                 // ProPresenter could never read it.
                 if let legacy { BinStorage.migrateDecks(from: legacy, to: root) }
-                return (ConversionQueue.scanBin(at: root), MediaItem.scan(in: downloadsURL))
+                return (ConversionQueue.scanBin(at: root), MediaItem.scan(in: downloadsURL), LyricsItem.scan(in: lyricsURL))
             }.value
             self?.groups = scanned
             self?.downloads = media
+            self?.songs = songs
             self?.discoverPresentations()
         }
     }
@@ -323,6 +329,45 @@ public final class ConversionQueue: ObservableObject {
             guard !ConversionGroup.exportedImages(in: folder).isEmpty else { return nil }
             return ConversionGroup(sourceName: folder.lastPathComponent, folderURL: folder)
         }
+    }
+
+    // MARK: - Songs
+
+    /// Saves a song from the Lyrics Formatter into the bin and shows it there.
+    ///
+    /// - Parameter libraryFolder: the operator's ProPresenter library, if they
+    ///   chose one. Its presentations' names are read, and nothing else, so a
+    ///   song already in it is saved under another name rather than clashing.
+    @discardableResult
+    public func addSong(_ song: LyricsSong, libraryFolder: URL? = nil) throws -> LyricsPackage.Saved {
+        let taken = libraryFolder.map(LyricsPackage.names(in:)) ?? []
+        let saved = try LyricsPackage.write(song, to: binLyricsURL, takenNames: taken)
+        songs = LyricsItem.scan(in: binLyricsURL)
+        return saved
+    }
+
+    /// What dragging a song hands over: its bundle, or nil if it has since been deleted.
+    public func dragPayload(for song: LyricsItem) -> URL? {
+        FileManager.default.fileExists(atPath: song.bundleURL.path) ? song.bundleURL : nil
+    }
+
+    /// Deletes one song and its card file.
+    public func remove(song: LyricsItem) throws {
+        try FileManager.default.removeItem(at: song.bundleURL)
+        try? FileManager.default.removeItem(at: LyricsPackage.cardURL(for: song.bundleURL))
+        songs.removeAll { $0.id == song.id }
+    }
+
+    /// Copies a song's bundle into a folder the operator chose.
+    public func save(song: LyricsItem, to destination: URL) throws {
+        let scoped = destination.startAccessingSecurityScopedResource()
+        defer { if scoped { destination.stopAccessingSecurityScopedResource() } }
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let target = destination.appendingPathComponent(song.bundleURL.lastPathComponent)
+        // Saving into the Lyrics folder itself would delete the song before the copy.
+        guard target.standardizedFileURL != song.bundleURL.standardizedFileURL else { return }
+        try? FileManager.default.removeItem(at: target)
+        try FileManager.default.copyItem(at: song.bundleURL, to: target)
     }
 
     // MARK: - Downloads
@@ -555,7 +600,9 @@ public final class ConversionQueue: ObservableObject {
         // bin because of that would be worse than leaving it.
         try? FileManager.default.removeItem(at: binPresentationsURL)
         try? FileManager.default.removeItem(at: binDownloadsURL)
+        try? FileManager.default.removeItem(at: binLyricsURL)
         downloads = []
+        songs = []
         reloadBin()
     }
 }

@@ -48,6 +48,17 @@ public final class LyricsDraft: ObservableObject {
         !parsed.foundLabels && !lyrics.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The song as it stands, ready to save.
+    public var song: LyricsSong {
+        LyricsSong(
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            artist: artist.trimmingCharacters(in: .whitespacesAndNewlines),
+            ccliNumber: ccliNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+            sections: parsed.sections,
+            order: parsed.order
+        )
+    }
+
     /// Empties the lyrics and the song's details. The bin isn't touched.
     public func clear() {
         lyrics = ""

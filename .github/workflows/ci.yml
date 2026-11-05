@@ -135,6 +135,9 @@ jobs:
         # the Swift writer, so it can't repeat the writer's mistakes. It runs
         # even when a test failed, since a bad bundle is often why.
         #
+        # The Lyrics Formatter's song (bundles/lyrics/) is checked the same
+        # way, as a text-only bundle.
+        #
         # The PDF bundle is required: without LibreOffice the others are
         # skipped, but a missing PDF bundle means the export itself broke. A
         # missing PowerPoint bundle only warns, so a failed LibreOffice install
@@ -145,6 +148,7 @@ jobs:
           BUNDLES: ${{ runner.temp }}/test-artifacts/bundles
         run: |
           test -f "$BUNDLES/pdf/sample.probundle" || { echo "the PDF bundle was not exported"; exit 1; }
+          test -f "$BUNDLES/lyrics/Morning Song.probundle" || { echo "the lyrics bundle was not exported"; exit 1; }
           for kind in pptx ppt; do
             test -f "$BUNDLES/$kind/sample.probundle" ||
               echo "::warning title=PowerPoint path not checked::No $kind bundle was built, probably because LibreOffice did not install. Only the PDF path was tested."

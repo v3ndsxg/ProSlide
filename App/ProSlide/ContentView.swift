@@ -28,6 +28,7 @@ struct ContentView: View {
     @State private var showingSaveImporter = false
     @State private var saveTarget: ConversionGroup?
     @State private var saveDownloadTarget: MediaItem?
+    @State private var saveSongTarget: LyricsItem?
     @State private var confirmingClear = false
     @State private var isTargeted = false
     @State private var expandedDecks: Set<String> = []
@@ -44,10 +45,14 @@ struct ContentView: View {
                     guard case .success(let url) = result else { return }
                     let group = saveTarget
                     let download = saveDownloadTarget
+                    let song = saveSongTarget
                     saveTarget = nil
                     saveDownloadTarget = nil
+                    saveSongTarget = nil
                     do {
-                        if let download {
+                        if let song {
+                            try queue.save(song: song, to: url)
+                        } else if let download {
                             try queue.save(download: download, to: url)
                         } else if let group {
                             // What is saved is what the card drags. It used to always
@@ -86,9 +91,16 @@ struct ContentView: View {
         var parts: [String] = []
         let decks = queue.groups.count
         let downloads = queue.downloads.count
+        let songs = queue.songs.count
         if decks > 0 { parts.append("\(decks) deck\(decks == 1 ? "" : "s") and their presentations") }
         if downloads > 0 { parts.append("\(downloads) download\(downloads == 1 ? "" : "s")") }
-        let what = parts.isEmpty ? "Nothing in the bin" : parts.joined(separator: " and ")
+        if songs > 0 { parts.append("\(songs) song\(songs == 1 ? "" : "s")") }
+        let what: String
+        switch parts.count {
+        case 0: what = "Nothing in the bin"
+        case 1, 2: what = parts.joined(separator: " and ")
+        default: what = parts.dropLast().joined(separator: ", ") + " and " + parts[parts.count - 1]
+        }
         return "Deletes \(what), and empties the Converter file list. This can\u{2019}t be undone."
     }
 
@@ -290,7 +302,7 @@ struct ContentView: View {
                 Text(binHint).font(.caption).foregroundStyle(.secondary)
             }
             if binCount == 0 {
-                Text("Converted decks and downloads appear here. Drag a card into ProPresenter.")
+                Text("Converted decks, downloads and songs appear here. Drag a card into ProPresenter.")
                     .font(.caption).foregroundStyle(.secondary)
                     .padding(.top, 4)
             }
@@ -301,6 +313,9 @@ struct ContentView: View {
                     }
                     ForEach(queue.downloads) { item in
                         mediaRow(item)
+                    }
+                    ForEach(queue.songs) { song in
+                        songRow(song)
                     }
                     ForEach(queue.groups) { group in
                         deckRow(group)
@@ -315,7 +330,9 @@ struct ContentView: View {
         .background(Color.secondary.opacity(0.06))
     }
 
-    private var binCount: Int { queue.groups.count + queue.downloads.count + downloads.activeItems.count }
+    private var binCount: Int {
+        queue.groups.count + queue.downloads.count + queue.songs.count + downloads.activeItems.count
+    }
 
     /// One line, naming what a drag does in the current mode.
     private var binHint: String {
@@ -431,6 +448,58 @@ struct ContentView: View {
     private func showDownloadLog() {
         DownloadLog.shared.ensureExists()
         BinOpener.reveal(DownloadLog.shared.fileURL)
+    }
+
+    /// A song from the Lyrics Formatter: the same card shape, handing over its
+    /// `.probundle` whatever the drag mode, since a song has no JPEGs.
+    private func songRow(_ song: LyricsItem) -> some View {
+        let payload = queue.dragPayload(for: song)
+        return HStack(spacing: 8) {
+            DragGrip()
+            Image(systemName: "music.note.list")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(song.name)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 5) {
+                    FormatTag(text: "LYRICS")
+                    Text(song.detail)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+            }
+            Spacer(minLength: 4)
+            if payload == nil {
+                Text("File missing").font(.caption2).foregroundStyle(.red)
+            } else {
+                statusChip(.ready)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.25), lineWidth: 0.5))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .draggable(on: payload)
+        .openHandCursor(when: payload != nil)
+        .help(song.artist.isEmpty ? song.name : "\(song.name) \u{00B7} \(song.artist)")
+        .contextMenu {
+            Button("Show in Finder") { BinOpener.reveal(song.bundleURL) }
+            Button("Save a copy\u{2026}") { saveSongTarget = song; showingSaveImporter = true }
+            Divider()
+            Button("Remove", role: .destructive) {
+                do {
+                    try queue.remove(song: song)
+                } catch {
+                    queue.message = error.localizedDescription
+                }
+            }
+        }
     }
 
     /// A downloaded video or audio file: the same card shape as a deck, but the
