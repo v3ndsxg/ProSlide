@@ -99,7 +99,8 @@ struct FormatTag: View {
     }
 }
 
-private extension Color {
+/// A colour from 0xRRGGBB, as the site badges and lyric groups store them.
+extension Color {
     init(hex: UInt32) {
         self.init(
             red: Double((hex >> 16) & 0xFF) / 255,

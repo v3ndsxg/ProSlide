@@ -110,6 +110,7 @@ swift test
 - `ConversionQueueTests`: the batch queue through an injected converter and packager, against a temporary bin, with no window or LibreOffice.
 - `DownloadModelsTests`, `DownloadEngineTests`, `DownloadQueueTests`, `DownloadsBinTests`: the Downloader's links, command lines, progress, engine and queue, and the bin's handling of downloads. The engine runs against stand-in `yt-dlp` and `ffmpeg` scripts, so no network or real tools are needed.
 - `RealToolsTests`: the engine against the real packaged tools and a local web server. Skipped unless `PROSLIDE_TOOLS_DIR` points at the tools; CI sets it. It never reaches the internet.
+- `LyricsParserTests`: the Lyrics Formatter's labels, cleanup, slide splitting and footer reading, and the tab's state. The lyrics in them are made up.
 - `ProPresenterPackageTests`: the zip and `.pro` writers, read back with independent readers and the system's `unzip`, plus a real bundle built from each fixture. These tests can't prove ProPresenter accepts a file; only an import can.
 
 CI runs on a macOS runner. It packages the app with the install script (both the beta and the production app), runs each packaged download tool from inside the app, runs the tests, then checks the bundles they built with `Scripts/check-probundle.py`. If LibreOffice didn't install, the run shows a warning that the PowerPoint path wasn't checked. Each run uploads a **test-artifacts** zip holding the test output, the rendered JPEGs and the bundles, ready to drag into ProPresenter.
@@ -130,8 +131,17 @@ python3 -I Scripts/check-probundle.py Deck.probundle   # or a folder of them
 ## Beta
 New work is tested on the `beta` branch, built as a separate app, and reaches `main` once it has proven out.
 
-### Coming next
-- **Lyrics Formatter:** format lyrics with ease so they import into ProPresenter quickly.
+### Lyrics Formatter (in progress)
+The **Lyrics Formatter** tab turns pasted lyrics into slides grouped by section. This first stage shows the slides; making the ProPresenter presentation comes next, so **Create Presentation** is not active yet.
+
+1. Fill in the **Song title**. **Artist** and **CCLI number** are optional, and are filled in from a CCLI footer in the pasted lyrics when they're empty.
+2. Paste the lyrics into **1 · Paste lyrics**, with each section's label on its own line above it.
+3. **2 · Slide preview** shows each group and its slides as you type. Choose **Lines per slide** (1 to 6, default 4) above it.
+
+- **Labels:** Verse, Pre-Chorus, Chorus, Bridge, Tag, Intro, Outro, Interlude, Ending, Vamp and Turnaround, numbered or not, written `Verse 1`, `VERSE 1:`, `[Verse 1]` or `Verse 1 -`, plus `V1`, `C`, `PC` and `B`, and their Ukrainian and Russian names (Куплет, Приспів, Припев, Бридж and so on). Groups are named as written and tidied, ending with a colon (**Verse 1:**, **Приспів:**). Any other short label in `[ ]` or ending with a colon becomes a grey group. Lines before the first label are left out, and lyrics with no labels at all show a warning.
+- **Cleanup:** anything in `( )` goes, as do repeat markers (`x2`, `2x`, `×3`), hyphens inside words (`Hal-le-lu-jah` becomes `Hallelujah`) and every character except letters, digits, spaces, commas and apostrophes. Capitalisation is left as pasted. CCLI and copyright lines never reach a slide.
+- **Slides:** blank lines split slides, and a longer block is split evenly (five lines at four per slide are 3 + 2). A section repeated word for word adds no slides; a repeated label with different words becomes, for example, **Chorus 2:**. A line and its translation, in a block that alternates Ukrainian and English, stay on one slide.
+- **Colours:** Verse blue, Chorus pink, Pre-Chorus light pink, Bridge purple, Interlude, Vamp and Turnaround green, Intro, Outro and Ending yellow, Tag orange, anything else grey.
 
 ### Installing the beta
 The beta is a separate app, **ProSlide Beta**, with its own bundle ID (`com.v3ndsxg.proslide.beta`), an orange icon marked BETA, and its own folder at `~/Documents/ProSlide Beta/`. It installs beside the production app and never reads or changes its decks.

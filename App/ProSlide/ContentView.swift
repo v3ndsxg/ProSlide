@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 enum AppTab: String, CaseIterable, Identifiable {
     case converter
     case downloader
+    case lyrics
 
     var id: String { rawValue }
 
@@ -14,6 +15,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         switch self {
         case .converter: "Converter"
         case .downloader: "Downloader"
+        case .lyrics: "Lyrics Formatter"
         }
     }
 }
@@ -99,7 +101,7 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 260)
+            .frame(width: 400)
             .padding(.top, 16)
 
             switch tab {
@@ -114,6 +116,8 @@ struct ContentView: View {
                     }
             case .downloader:
                 DownloaderView()
+            case .lyrics:
+                LyricsFormatterView()
             }
         }
         .frame(maxWidth: .infinity)
