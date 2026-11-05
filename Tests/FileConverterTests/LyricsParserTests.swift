@@ -75,6 +75,35 @@ final class LyricsParserTests: XCTestCase {
         }
     }
 
+    func testANumberBeforeTheWordIsReadToo() {
+        XCTAssertEqual(label("1 Verse:"), LyricsParser.Label(name: "Verse 1:", kind: .verse))
+        XCTAssertEqual(label("2 Verse"), LyricsParser.Label(name: "Verse 2:", kind: .verse))
+        XCTAssertEqual(label("1 Куплет"), LyricsParser.Label(name: "Куплет 1:", kind: .verse))
+        XCTAssertNil(label("23 sings in me"))
+    }
+
+    /// Planning Center charts put notes for the band after the label's colon.
+    func testNotesAfterALabelsColonAreDropped() {
+        let cases: [(String, String, LyricsSectionKind)] = [
+            ("Chorus:1х", "Chorus:", .chorus),
+            ("Chorus:2x", "Chorus:", .chorus),
+            ("Chorus: 2x", "Chorus:", .chorus),
+            ("Програш:G", "Програш:", .interlude),
+            ("КУПЛЕТ 1:(соло)", "Куплет 1:", .verse),
+            ("ПРИСПІВ:(разом тихо)", "Приспів:", .chorus),
+            ("БРІДЖ:3р. (1,2-голосно 3-тихо)", "Брідж:", .bridge),
+        ]
+        for (line, name, kind) in cases {
+            XCTAssertEqual(label(line), LyricsParser.Label(name: name, kind: kind), line)
+        }
+        XCTAssertEqual(label("БРІДЖ:3р.(1-тихо(дів.)2-голосніше")?.openBrackets, 1)
+    }
+
+    func testMiscIsAGreyGroup() {
+        XCTAssertEqual(label("Misc 1"), LyricsParser.Label(name: "Misc 1:", kind: .other))
+        XCTAssertEqual(label("MISC"), LyricsParser.Label(name: "Misc:", kind: .other))
+    }
+
     func testUnknownLabelsAreGreyAndNamedAsWritten() {
         XCTAssertEqual(label("[Hook]"), LyricsParser.Label(name: "Hook:", kind: .other))
         XCTAssertEqual(label("[SPONTANEOUS]"), LyricsParser.Label(name: "Spontaneous:", kind: .other))
@@ -117,6 +146,16 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(clean("Свят Господь х2"), "Свят Господь")  // Cyrillic х
         XCTAssertEqual(clean("x2"), "")
         XCTAssertEqual(clean("Psalm 23 sings in me"), "Psalm 23 sings in me")
+        XCTAssertEqual(clean("Glory to the King-3"), "Glory to the King")
+        XCTAssertEqual(clean("Слава Царю!-2х"), "Слава Царю")
+        XCTAssertEqual(clean("Співай 3р."), "Співай")
+        XCTAssertEqual(clean("Співай 2 рази"), "Співай")
+        XCTAssertEqual(clean("Співай радісно"), "Співай радісно")
+    }
+
+    func testSpacesBeforeCommasAndCommaOnlyLinesAreTidied() {
+        XCTAssertEqual(clean("Світло моє , Ти що в серці ,"), "Світло моє, Ти що в серці,")
+        XCTAssertEqual(clean(","), "")
     }
 
     func testHyphensJoinWordsAndDashesBecomeSpaces() {
@@ -241,6 +280,39 @@ final class LyricsParserTests: XCTestCase {
         """)
         XCTAssertEqual(parsed.sections.map(\.name), ["Chorus:", "Verse 2:", "Chorus 2:", "Verse 2 (2):"])
         XCTAssertEqual(parsed.sections.map(\.id), [0, 1, 2, 3])
+    }
+
+    /// The shape of a Ukrainian chart from Planning Center, with made-up words.
+    func testAPlanningCenterChartWithNotesAndBareRepeats() {
+        let parsed = LyricsParser.parse("""
+        1 Verse:
+        Світло моє , Ти що в серці ,
+        Сила моя .
+        Prechorus:
+        Ти ведеш мене
+        Chorus:1х
+        Співаю Тобі , Співаю завжди
+        ,
+        ПРОГРАШ
+        2 Verse:
+        Голос мій для Тебе
+        Prechorus:
+        Chorus:2x
+        Програш:
+        БРІДЖ:3р.(1-тихо(дів.)2-голосніше
+        3-голосно)
+        Хай світло сяє!
+        ПРОГРАШ:
+        БРІДЖ:3р. (1,2-голосно 3-тихо)
+        """)
+        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1:", "Pre-Chorus:", "Chorus:", "Verse 2:", "Брідж:"])
+        XCTAssertEqual(lines(parsed), [
+            [["Світло моє, Ти що в серці,", "Сила моя"]],
+            [["Ти ведеш мене"]],
+            [["Співаю Тобі, Співаю завжди"]],
+            [["Голос мій для Тебе"]],
+            [["Хай світло сяє"]],
+        ])
     }
 
     func testALabelWithNothingUnderItAddsNoGroup() {
