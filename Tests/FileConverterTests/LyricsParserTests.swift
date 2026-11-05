@@ -214,23 +214,23 @@ final class LyricsParserTests: XCTestCase {
     }
 
     func testLongBlocksSplitEvenly() {
-        let verse = "Verse 1\none\ntwo\nthree\nfour\nfive"
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 4)), [[["one", "two", "three"], ["four", "five"]]])
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 2)), [[["one", "two"], ["three", "four"], ["five"]]])
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 1)), [[["one"], ["two"], ["three"], ["four"], ["five"]]])
+        let verse = "Verse 1\nOne\nTwo\nThree\nFour\nFive"
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 4)), [[["One", "Two", "Three"], ["Four", "Five"]]])
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 2)), [[["One", "Two"], ["Three", "Four"], ["Five"]]])
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 1)), [[["One"], ["Two"], ["Three"], ["Four"], ["Five"]]])
         let nine = "Verse 1\n" + (1...9).map(String.init).joined(separator: "\n")
         XCTAssertEqual(LyricsParser.parse(nine, linesPerSlide: 4).sections[0].slides.map(\.lines.count), [3, 3, 3])
     }
 
     func testBlankLinesSplitSlidesWithinASection() {
-        let parsed = LyricsParser.parse("Verse 1\none\ntwo\n\nthree\nfour", linesPerSlide: 4)
-        XCTAssertEqual(lines(parsed), [[["one", "two"], ["three", "four"]]])
+        let parsed = LyricsParser.parse("Verse 1\nOne\nTwo\n\nThree\nFour", linesPerSlide: 4)
+        XCTAssertEqual(lines(parsed), [[["One", "Two"], ["Three", "Four"]]])
     }
 
     func testLinesPerSlideIsKeptInRange() {
-        let verse = "Verse 1\none\ntwo"
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 0)), [[["one"], ["two"]]])
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 99)), [[["one", "two"]]])
+        let verse = "Verse 1\nOne\nTwo"
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 0)), [[["One"], ["Two"]]])
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 99)), [[["One", "Two"]]])
     }
 
     func testLinesBeforeTheFirstLabelAreLeftOut() {
@@ -313,6 +313,22 @@ final class LyricsParserTests: XCTestCase {
             [["Голос мій для Тебе"]],
             [["Хай світло сяє"]],
         ])
+    }
+
+    func testALineStartingInLowercaseJoinsTheLineAbove() {
+        let parsed = LyricsParser.parse("""
+        Verse 1
+        Who will carry the weight of the whole
+        world?
+        Holy is Your
+        Name
+        """)
+        XCTAssertEqual(lines(parsed), [[["Who will carry the weight of the whole world", "Holy is Your", "Name"]]])
+    }
+
+    func testALowercaseLineAfterABlankLineStartsANewSlide() {
+        let parsed = LyricsParser.parse("Verse 1\nfirst slide\n\nsecond slide", linesPerSlide: 4)
+        XCTAssertEqual(lines(parsed), [[["first slide"], ["second slide"]]])
     }
 
     func testALabelWithNothingUnderItAddsNoGroup() {
@@ -425,7 +441,7 @@ final class LyricsDraftTests: XCTestCase {
 
     func testChangingLinesPerSlideReparses() throws {
         let draft = LyricsDraft(defaults: try makeDefaults())
-        draft.lyrics = "Verse 1\none\ntwo\nthree\nfour"
+        draft.lyrics = "Verse 1\nOne\nTwo\nThree\nFour"
         XCTAssertEqual(draft.parsed.slideCount, 1)
         draft.linesPerSlide = 2
         XCTAssertEqual(draft.parsed.slideCount, 2)

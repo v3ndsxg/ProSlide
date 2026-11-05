@@ -103,6 +103,8 @@ public struct ParsedLyrics: Equatable, Sendable {
 ///   its parts, a spaced dash becomes a space, and every character other than
 ///   letters, digits, spaces, commas and apostrophes goes. Capitalisation is
 ///   left exactly as pasted.
+/// - A line starting in lowercase joins the line above it, since it was a
+///   long line cut in two when it was copied.
 /// - Blank lines split slides. A longer block is split evenly into slides of at
 ///   most `linesPerSlide` lines, so five lines at four per slide are 3 + 2.
 /// - A section repeated word for word, or a label repeated with nothing under
@@ -171,7 +173,14 @@ public enum LyricsParser {
                 continue
             }
             let cleaned = clean(line, bracketDepth: &bracketDepth)
-            if !cleaned.isEmpty { block.append(cleaned) }
+            guard !cleaned.isEmpty else { continue }
+            // A line starting in lowercase is the end of the one above, cut
+            // off by the width of whatever it was copied from: "…за Вселенну" / "всю?".
+            if let first = cleaned.first, first.isLowercase, let last = block.indices.last {
+                block[last] += " " + cleaned
+            } else {
+                block.append(cleaned)
+            }
         }
         endSection()
 
