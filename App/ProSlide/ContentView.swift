@@ -292,13 +292,7 @@ struct ContentView: View {
             // The mode only changes what a deck hands over; a download is always
             // the file itself.
             if !queue.groups.isEmpty {
-                Picker("Card drag", selection: $queue.dragMode) {
-                    ForEach(DragMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                DragModeTabs(selection: $queue.dragMode)
                 Text(binHint).font(.caption).foregroundStyle(.secondary)
             }
             if binCount == 0 {
@@ -325,9 +319,13 @@ struct ContentView: View {
             }
         }
         .padding(14)
-        .frame(width: 340)
+        // If anything inside ever asks for more than 340 pt, it overflows to
+        // the right and is clipped, rather than being centred and spilling
+        // over the divider into the left pane.
+        .frame(width: 340, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color.secondary.opacity(0.06))
+        .clipped()
     }
 
     private var binCount: Int {
@@ -710,6 +708,59 @@ private extension View {
         } else {
             self
         }
+    }
+}
+
+// MARK: - Drag mode
+
+/// The bin's "JPEG Files | ProPresenter Presentation" switch, drawn by hand.
+///
+/// It used to be a segmented `Picker`. On macOS 27.2.1 that control, once the
+/// window lays out again (switching tools does it), gives every segment the
+/// width of the longest label, about 368 pt, though the bin has 312. The bin
+/// then grew to fit it and spilled over the divider. This one takes the width
+/// it is offered and shrinks its labels a little rather than ask for more.
+/// It is styled like `QualityTabs`.
+private struct DragModeTabs: View {
+    @Binding var selection: DragMode
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(DragMode.allCases) { mode in
+                tab(mode)
+            }
+        }
+        .padding(2)
+        .frame(maxWidth: .infinity)
+        .background(Color.secondary.opacity(0.18), in: RoundedRectangle(cornerRadius: 9))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Card drag")
+    }
+
+    private func tab(_ mode: DragMode) -> some View {
+        let chosen = mode == selection
+        return Button {
+            selection = mode
+        } label: {
+            Text(mode.title)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity)
+                .background {
+                    if chosen {
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                            .shadow(color: .black.opacity(0.2), radius: 0.5, y: 0.5)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(mode.title)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 
