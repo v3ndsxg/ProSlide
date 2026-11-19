@@ -32,7 +32,7 @@ final class LyricsParserTests: XCTestCase {
             ("Chorus", "Chorus", .chorus),
             ("Pre-Chorus", "Pre-Chorus", .preChorus),
             ("PreChorus", "Pre-Chorus", .preChorus),
-            ("Pre Chorus 2", "Pre-Chorus 2", .preChorus),
+            ("Pre Chorus 2", "Pre-Chorus", .preChorus),
             ("Bridge", "Bridge", .bridge),
             ("Tag:", "Tag", .tag),
             ("Intro", "Intro", .intro),
@@ -53,6 +53,7 @@ final class LyricsParserTests: XCTestCase {
         XCTAssertEqual(label("V1"), LyricsParser.Label(name: "Verse 1", kind: .verse))
         XCTAssertEqual(label("C"), LyricsParser.Label(name: "Chorus", kind: .chorus))
         XCTAssertEqual(label("PC"), LyricsParser.Label(name: "Pre-Chorus", kind: .preChorus))
+        XCTAssertEqual(label("PC2"), LyricsParser.Label(name: "Pre-Chorus", kind: .preChorus))
         XCTAssertEqual(label("B"), LyricsParser.Label(name: "Bridge", kind: .bridge))
         XCTAssertEqual(label("C2"), LyricsParser.Label(name: "Chorus 2", kind: .chorus))
     }
@@ -64,6 +65,7 @@ final class LyricsParserTests: XCTestCase {
             ("Приспів", "Приспів", .chorus),
             ("[Припев]", "Припев", .chorus),
             ("Передприспів", "Передприспів", .preChorus),
+            ("Передприспів 2", "Передприспів", .preChorus),
             ("Предприпев:", "Предприпев", .preChorus),
             ("Бридж", "Бридж", .bridge),
             ("Міст", "Міст", .bridge),
@@ -295,6 +297,20 @@ final class LyricsParserTests: XCTestCase {
         """)
         XCTAssertEqual(parsed.sections.map(\.name), ["Chorus", "Verse 2", "Chorus 2", "Verse 2 (2)"])
         XCTAssertEqual(parsed.sections.map(\.id), [0, 1, 2, 3])
+    }
+
+    func testAPreChorusIsNeverNumbered() {
+        let parsed = LyricsParser.parse("""
+        Pre-Chorus 1
+        Lift your eyes
+
+        Pre-Chorus 2
+        Raise your voice
+
+        Pre-Chorus
+        """)
+        XCTAssertEqual(parsed.sections.map(\.name), ["Pre-Chorus", "Pre-Chorus"])
+        XCTAssertEqual(parsed.order, [0, 1, 1], "a bare Pre-Chorus names the latest one again")
     }
 
     /// The shape of a Ukrainian chart from Planning Center, with made-up words.
