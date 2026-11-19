@@ -186,9 +186,10 @@ final class LyricsExportTests: XCTestCase {
 
     func testTheBundleHoldsOnlyTheManifestStored() throws {
         let folder = try makeTemporaryDirectory()
-        let saved = try LyricsPackage.write(song(), to: folder)
+        let saved = try LyricsPackage.write(song(), as: "Morning Song", to: folder)
         XCTAssertEqual(saved.name, "Morning Song")
-        XCTAssertFalse(saved.wasRenamed)
+        XCTAssertFalse(saved.addedArtist)
+        XCTAssertFalse(saved.replacedInBin)
         XCTAssertEqual(saved.url.lastPathComponent, "Morning Song.probundle")
 
         let entries = try TestZipReader.entries(of: Data(contentsOf: saved.url))
@@ -203,7 +204,7 @@ final class LyricsExportTests: XCTestCase {
 
     func testTheBinCardDescribesTheSong() throws {
         let folder = try makeTemporaryDirectory()
-        try LyricsPackage.write(song(), to: folder)
+        try LyricsPackage.write(song(), as: "Morning Song", to: folder)
         let items = LyricsItem.scan(in: folder)
         XCTAssertEqual(items.count, 1, "the card file is hidden and not a song")
         XCTAssertEqual(items.first?.name, "Morning Song")
@@ -211,12 +212,18 @@ final class LyricsExportTests: XCTestCase {
         XCTAssertEqual(items.first?.detail, "3 slides \u{00B7} V1 C C")
     }
 
-    func testATakenTitleGetsTheArtistThenANumber() {
-        XCTAssertEqual(LyricsPackage.uniqueName(title: "Song", artist: "Jane", taken: []), "Song")
-        XCTAssertEqual(LyricsPackage.uniqueName(title: "Song", artist: "Jane", taken: ["song"]), "Song (Jane)")
-        XCTAssertEqual(LyricsPackage.uniqueName(title: "Song", artist: "", taken: ["song"]), "Song (2)")
-        XCTAssertEqual(LyricsPackage.uniqueName(title: "Song", artist: "Jane", taken: ["song", "song (jane)"]), "Song (2)")
-        XCTAssertEqual(LyricsPackage.uniqueName(title: "Song", artist: "", taken: ["song", "song (2)"]), "Song (3)")
+    func testATakenTitleGetsTheArtistAndIsNeverNumbered() {
+        XCTAssertEqual(LyricsPackage.checkName(title: "Song", artist: "Jane", libraryNames: []), .free("Song"))
+        XCTAssertEqual(LyricsPackage.checkName(title: "Song", artist: "", libraryNames: ["song (jane)"]), .free("Song"))
+        XCTAssertEqual(LyricsPackage.checkName(title: "Song", artist: "Jane", libraryNames: ["song"]), .withArtist("Song (Jane)"))
+        XCTAssertEqual(LyricsPackage.checkName(title: "Song", artist: "  ", libraryNames: ["song"]), .needsArtist)
+        XCTAssertEqual(LyricsPackage.checkName(title: "Song", artist: "Jane", libraryNames: ["song", "song (jane)"]), .taken("Song (Jane)"))
+    }
+
+    func testOnlyAnExactTitleIsTaken() {
+        let names: Set<String> = ["holy spirit", "song (someone else)", "song - live"]
+        XCTAssertEqual(LyricsPackage.checkName(title: "Holy", artist: "", libraryNames: names), .free("Holy"))
+        XCTAssertEqual(LyricsPackage.checkName(title: "Song", artist: "", libraryNames: names), .free("Song"))
     }
 
     func testLookalikeLettersAndCaseCountAsTheSameTitle() {
@@ -225,25 +232,63 @@ final class LyricsExportTests: XCTestCase {
         XCTAssertNotEqual(LyricsPackage.foldedName("Morning Song"), LyricsPackage.foldedName("Evening Song"))
     }
 
-    func testASongAlreadyInTheLibraryOrTheBinIsRenamed() throws {
+    func testEveryLibraryAndFolderInsideIsSearched() throws {
+        let libraries = try makeTemporaryDirectory()
+        let english = libraries.appendingPathComponent("English Songs", isDirectory: true)
+        let nested = libraries.appendingPathComponent("Ukrainian Songs/Archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: english, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data().write(to: english.appendingPathComponent("Morning Song.pro"))
+        try Data().write(to: nested.appendingPathComponent("Приспів Слави.pro"))
+        try Data().write(to: nested.appendingPathComponent("Notes.txt"))
+        try Data().write(to: libraries.appendingPathComponent(".Hidden Song.pro"))
+
+        XCTAssertEqual(LyricsPackage.libraryNames(in: libraries), ["morning song", LyricsPackage.foldedName("Приспів Слави")])
+        XCTAssertNil(LyricsPackage.libraryNames(in: libraries.appendingPathComponent("Missing")))
+    }
+
+    func testASongInTheLibraryGetsTheArtistOrIsNotSaved() throws {
         let bin = try makeTemporaryDirectory()
-        let library = try makeTemporaryDirectory()
-        try Data().write(to: library.appendingPathComponent("Morning Song.pro"))
+        let names: Set<String> = ["morning song"]
 
-        let first = try LyricsPackage.write(song(), to: bin, takenNames: LyricsPackage.names(in: library))
-        XCTAssertEqual(first.name, "Morning Song (Jane Doe)")
-        XCTAssertTrue(first.wasRenamed)
+        guard case .saved(let saved) = try LyricsPackage.save(song(), to: bin, libraryNames: names) else {
+            return XCTFail("the artist tells the songs apart")
+        }
+        XCTAssertEqual(saved.name, "Morning Song (Jane Doe)")
+        XCTAssertTrue(saved.addedArtist)
 
-        let second = try LyricsPackage.write(song(), to: bin, takenNames: LyricsPackage.names(in: library))
-        XCTAssertEqual(second.name, "Morning Song (2)")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: first.url.path), "nothing is overwritten")
+        XCTAssertEqual(try LyricsPackage.save(song(artist: ""), to: bin, libraryNames: names), .needsArtist)
+        XCTAssertEqual(
+            try LyricsPackage.save(song(), to: bin, libraryNames: names.union(["morning song (jane doe)"])),
+            .alreadyInLibrary("Morning Song (Jane Doe)")
+        )
+        XCTAssertEqual(LyricsItem.scan(in: bin).map(\.name), ["Morning Song (Jane Doe)"], "a blocked song saves nothing")
+    }
+
+    func testASongOfTheSameNameInTheBinIsReplaced() throws {
+        let bin = try makeTemporaryDirectory()
+        guard case .saved(let first) = try LyricsPackage.save(song(), to: bin, libraryNames: []) else {
+            return XCTFail("the title is free")
+        }
+        XCTAssertFalse(first.replacedInBin)
+        guard case .saved(let second) = try LyricsPackage.save(song(title: "morning  SONG", artist: ""), to: bin, libraryNames: []) else {
+            return XCTFail("the bin never blocks a song")
+        }
+        XCTAssertTrue(second.replacedInBin)
+        XCTAssertEqual(second.name, "morning SONG", "spaces are tidied")
+        XCTAssertEqual(LyricsItem.scan(in: bin).map(\.name), ["morning SONG"])
+        // Listed rather than checked by path: a Mac's disk ignores case, so the
+        // old card's path would also find the new one.
+        let files = try FileManager.default.contentsOfDirectory(atPath: bin.path).sorted()
+        XCTAssertEqual(files, [".morning SONG.json", "morning SONG.probundle"], "the old bundle and its card are gone")
     }
 
     func testAnEmptyArtistNeverBecomesPartOfTheName() throws {
         let bin = try makeTemporaryDirectory()
-        try LyricsPackage.write(song(artist: ""), to: bin)
-        let second = try LyricsPackage.write(song(artist: ""), to: bin)
-        XCTAssertEqual(second.name, "Morning Song (2)")
+        guard case .saved(let saved) = try LyricsPackage.save(song(artist: ""), to: bin, libraryNames: []) else {
+            return XCTFail("the title is free")
+        }
+        XCTAssertEqual(saved.name, "Morning Song")
     }
 
     // MARK: - The bin
@@ -259,7 +304,7 @@ final class LyricsExportTests: XCTestCase {
         )
         XCTAssertEqual(queue.binLyricsURL.standardizedFileURL.path, root.appendingPathComponent("Lyrics").standardizedFileURL.path)
 
-        let saved = try queue.addSong(song())
+        guard case .saved(let saved) = try queue.addSong(song(), librariesFolder: nil) else { return XCTFail("saved") }
         XCTAssertEqual(queue.songs.map(\.name), ["Morning Song"])
         let item = try XCTUnwrap(queue.songs.first)
         XCTAssertEqual(queue.dragPayload(for: item)?.resolvingSymlinksInPath(), saved.url.resolvingSymlinksInPath())
@@ -269,7 +314,7 @@ final class LyricsExportTests: XCTestCase {
         XCTAssertNil(queue.dragPayload(for: item))
         XCTAssertFalse(FileManager.default.fileExists(atPath: LyricsPackage.cardURL(for: saved.url).path))
 
-        try queue.addSong(song())
+        try queue.addSong(song(), librariesFolder: nil)
         try queue.clearBin()
         XCTAssertTrue(queue.songs.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: queue.binLyricsURL.path))
@@ -284,7 +329,7 @@ final class LyricsExportTests: XCTestCase {
             presentationsDirectory: root.appendingPathComponent("Pro", isDirectory: true),
             legacyBin: nil
         )
-        try queue.addSong(song())
+        try queue.addSong(song(), librariesFolder: nil)
         let destination = root.appendingPathComponent("Elsewhere", isDirectory: true)
         try queue.save(song: try XCTUnwrap(queue.songs.first), to: destination)
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.appendingPathComponent("Morning Song.probundle").path))

@@ -55,7 +55,7 @@ A `.probundle` is an uncompressed zip holding `<Name>.pro` and the deck's images
 
 - The bundle works on any machine, and keeps working after the bin is cleared.
 - On import, ProPresenter copies the images into its own media store, with media management on or off. Importing the same deck twice gives a second copy named `-1`.
-- ProSlide never writes or deletes anything in ProPresenter's own folders. The only thing it ever reads there is the list of presentation names in a library folder you choose for the Lyrics Formatter's duplicate check.
+- ProSlide never writes or deletes anything in ProPresenter's own folders. The only thing it ever reads there is the list of presentation names in `~/Documents/ProPresenter/Libraries`, for the Lyrics Formatter's duplicate check.
 
 Bundles are built during **Convert**, so a deck is ready to drag when it reaches the bin. Each is written under a temporary name and renamed when complete, so an interrupted one is never offered.
 
@@ -144,7 +144,13 @@ The **Lyrics Formatter** tab turns pasted lyrics into a ProPresenter presentatio
 - **Slides:** a line starting in lowercase is joined to the line above, since it is usually a long line that was cut in two when it was copied. Blank lines always split slides. With **All lines**, each block between blank lines is one slide, so a section with no blank lines is a single slide. With **2 lines** or **4 lines**, a longer block is split evenly (five lines at four per slide are 3 + 2). A section repeated word for word adds no slides; a repeated label with different words becomes, for example, **Chorus 2**. A Pre-Chorus is never numbered: **Pre-Chorus 2** or **PC2** is just **Pre-Chorus**. A line and its translation, in a block that alternates Ukrainian and English, stay on one slide.
 - **Colours:** Verse blue, Chorus pink, Pre-Chorus light pink, Bridge purple, Interlude, Vamp and Turnaround green, Intro, Outro and Ending yellow, Tag orange, anything else grey.
 - **The presentation:** a `.probundle` holding one `.pro` and no media. Each slide is one text box filling the 1920×1080 slide in Lato Bold 60 pt, white, centred across and down, with a soft shadow, copied from a song exported from ProPresenter; a theme applied in ProPresenter restyles it. It starts with a **Blank** group holding one empty slide, and has one arrangement, **Default**, following the order the lyrics name the sections in (a bare repeated label such as `Chorus:2x` adds the Chorus again; the repeat count itself doesn't). The title, artist (as Author) and CCLI number are stored in the presentation's CCLI info with **display** off, so no footer shows.
-- **Names:** songs are kept in `~/Documents/ProSlide/Lyrics/` beside `Bin`, `Pro` and `Downloads`. A title already used there gets the artist added, "Title (Artist)", or a number, "Title (2)", and nothing is ever overwritten. Titles that differ only in case, or in a Latin letter typed for a Cyrillic one that looks the same, count as the same. To check against your ProPresenter library too, click **Choose ProPresenter library…** under the details and pick its folder (on a Mac, usually in `~/Documents/ProPresenter/Libraries/`). ProSlide reads only the names of the presentations in it, never their contents, and never writes there.
+- **Names:** songs are kept in `~/Documents/ProSlide/Lyrics/` beside `Bin`, `Pro` and `Downloads`. **Create Presentation** first checks the title against every ProPresenter library in `~/Documents/ProPresenter/Libraries/`, including the folders inside them:
+  - Not there: the song is saved as typed.
+  - There, with an artist entered: the song is saved as "Title (Artist)".
+  - There, with no artist: nothing is saved, and a popup asks for an artist name.
+  - "Title (Artist)" is there too: nothing is saved, and a popup says the song already exists.
+
+  Only an exact title counts: "Holy" doesn't match "Holy Spirit", and "Song" doesn't match "Song (Someone)". Titles that differ only in case or spacing, or in a Latin letter typed for a Cyrillic one that looks the same, count as the same. Songs are never numbered. A song of the same name already in ProSlide's bin is replaced, since the bin only stages songs on their way into ProPresenter. ProSlide reads only the names of the presentations in the libraries, never their contents, and never writes there. If the Libraries folder doesn't exist, as on a Mac without ProPresenter, songs are saved without the check, and the row under the details says so.
 
 ### Installing the beta
 The beta is a separate app, **ProSlide Beta**, with its own bundle ID (`com.v3ndsxg.proslide.beta`), an orange icon marked BETA, and its own folder at `~/Documents/ProSlide Beta/`. It installs beside the production app and never reads or changes its decks.

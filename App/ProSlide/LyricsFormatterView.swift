@@ -1,21 +1,35 @@
 import FileConverterCore
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// The Lyrics Formatter tab: the song's details across the top, the pasted
 /// lyrics on the left, and the slides they make on the right.
 struct LyricsFormatterView: View {
     @EnvironmentObject private var draft: LyricsDraft
     @EnvironmentObject private var queue: ConversionQueue
-    /// The operator's ProPresenter library, if chosen. Only the names of the
-    /// presentations in it are read, to keep a new song from taking one.
-    @AppStorage("proPresenterLibraryPath") private var libraryPath = ""
-    @State private var choosingLibrary = false
     @State private var outcome: Outcome?
+    /// Why Create Presentation saved nothing, shown as an alert.
+    @State private var duplicate: Duplicate?
+    @FocusState private var artistFocused: Bool
 
     private enum Outcome: Equatable {
         case saved(String)
         case failed(String)
+    }
+
+    private enum Duplicate: Equatable {
+        /// The title is in a library and there is no artist.
+        case needsArtist
+        /// "Title (Artist)" is in a library too.
+        case inLibrary(String)
+
+        var message: String {
+            switch self {
+            case .needsArtist:
+                "Hey, a song with that name already exists in your ProPresenter Library. Please add an artist name and create the presentation again."
+            case .inLibrary(let name):
+                "A song named \u{201C}\(name)\u{201D} already exists in your ProPresenter Library."
+            }
+        }
     }
 
     var body: some View {
@@ -39,8 +53,16 @@ struct LyricsFormatterView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity)
-        .fileImporter(isPresented: $choosingLibrary, allowedContentTypes: [.folder]) { picked in
-            if case .success(let url) = picked { libraryPath = url.path }
+        .alert(
+            "Song already exists",
+            isPresented: Binding(get: { duplicate != nil }, set: { if !$0 { duplicate = nil } }),
+            presenting: duplicate
+        ) { shown in
+            Button("OK") {
+                if shown == .needsArtist { artistFocused = true }
+            }
+        } message: { shown in
+            Text(shown.message)
         }
         // A result describes the song just saved; editing starts the next one.
         .onChange(of: draft.lyrics) { _ in outcome = nil }
@@ -63,20 +85,39 @@ struct LyricsFormatterView: View {
         }
     }
 
-    private var libraryURL: URL? {
-        libraryPath.isEmpty ? nil : URL(fileURLWithPath: libraryPath, isDirectory: true)
+    private var librariesURL: URL { LyricsPackage.proPresenterLibrariesURL }
+
+    private var librariesFound: Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: librariesURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     private func create() {
         let song = draft.song
         do {
-            let saved = try queue.addSong(song, libraryFolder: libraryURL)
-            outcome = .saved(saved.wasRenamed
-                ? "Saved as \u{201C}\(saved.name)\u{201D} in the bin, because \u{201C}\(song.title)\u{201D} is already taken."
-                : "Saved \u{201C}\(saved.name)\u{201D} in the bin. Drag its card into ProPresenter.")
+            switch try queue.addSong(song, librariesFolder: librariesURL) {
+            case .saved(let saved):
+                outcome = .saved(message(for: saved, title: song.title))
+            case .needsArtist:
+                outcome = nil
+                duplicate = .needsArtist
+            case .alreadyInLibrary(let name):
+                outcome = nil
+                duplicate = .inLibrary(name)
+            }
         } catch {
             outcome = .failed(error.localizedDescription)
         }
+    }
+
+    private func message(for saved: LyricsPackage.Saved, title: String) -> String {
+        if saved.addedArtist {
+            return "Saved as \u{201C}\(saved.name)\u{201D}, because \u{201C}\(title)\u{201D} is already in your ProPresenter Library."
+        }
+        if saved.replacedInBin {
+            return "Replaced \u{201C}\(saved.name)\u{201D} in the bin. Drag its card into ProPresenter."
+        }
+        return "Saved \u{201C}\(saved.name)\u{201D} in the bin. Drag its card into ProPresenter."
     }
 
     // MARK: - Song details
@@ -85,19 +126,28 @@ struct LyricsFormatterView: View {
         HStack(alignment: .top, spacing: 12) {
             field("Song title", prompt: "Required", text: $draft.title)
                 .frame(maxWidth: .infinity)
-            field("Artist (optional)", prompt: "", text: $draft.artist)
+            field("Artist (optional)", prompt: "", text: $draft.artist, focused: $artistFocused)
                 .frame(maxWidth: .infinity)
             field("CCLI number (optional)", prompt: "", text: $draft.ccliNumber)
                 .frame(width: 170)
         }
     }
 
-    private func field(_ label: String, prompt: String, text: Binding<String>) -> some View {
+    private func field(
+        _ label: String, prompt: String, text: Binding<String>, focused: FocusState<Bool>.Binding? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            TextField(label, text: text, prompt: Text(prompt))
-                .textFieldStyle(.roundedBorder)
-                .labelsHidden()
+            if let focused {
+                TextField(label, text: text, prompt: Text(prompt))
+                    .textFieldStyle(.roundedBorder)
+                    .labelsHidden()
+                    .focused(focused)
+            } else {
+                TextField(label, text: text, prompt: Text(prompt))
+                    .textFieldStyle(.roundedBorder)
+                    .labelsHidden()
+            }
         }
     }
 
@@ -221,14 +271,10 @@ struct LyricsFormatterView: View {
     private var libraryRow: some View {
         HStack(spacing: 6) {
             Image(systemName: "books.vertical").foregroundStyle(.secondary)
-            if let libraryURL {
-                Text("Titles are checked against your ProPresenter library \u{201C}\(libraryURL.lastPathComponent)\u{201D}.")
-                Button("Change\u{2026}") { choosingLibrary = true }.buttonStyle(.link)
-                Button("Stop checking") { libraryPath = "" }.buttonStyle(.link)
-            } else {
-                Text("Titles are checked against the bin only.")
-                Button("Choose ProPresenter library\u{2026}") { choosingLibrary = true }.buttonStyle(.link)
-            }
+            Text(librariesFound
+                ? "Titles are checked against your ProPresenter libraries."
+                : "No ProPresenter libraries found in Documents.")
+                .help(librariesURL.path)
             Spacer()
         }
         .font(.caption)
