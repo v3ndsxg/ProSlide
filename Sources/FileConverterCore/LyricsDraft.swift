@@ -14,9 +14,9 @@ public final class LyricsDraft: ObservableObject {
     @Published public var artist: String = ""
     @Published public var ccliNumber: String = ""
     /// Remembered between launches.
-    @Published public var linesPerSlide: Int {
+    @Published public var linesPerSlide: LinesPerSlide {
         didSet {
-            defaults.set(linesPerSlide, forKey: Keys.linesPerSlide)
+            defaults.set(linesPerSlide.rawValue, forKey: Keys.linesPerSlide)
             reparse()
         }
     }
@@ -34,8 +34,10 @@ public final class LyricsDraft: ObservableObject {
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let stored = defaults.integer(forKey: Keys.linesPerSlide)
-        linesPerSlide = LyricsParser.linesPerSlideRange.contains(stored) ? stored : LyricsParser.defaultLinesPerSlide
+        // A choice the menu no longer offers (1, 3, 5 or 6 from before) falls
+        // back to the default.
+        let stored = (defaults.object(forKey: Keys.linesPerSlide) as? Int).flatMap(LinesPerSlide.init(rawValue:))
+        linesPerSlide = stored ?? .default
     }
 
     /// Whether there is enough to make a presentation: a title and at least one slide.

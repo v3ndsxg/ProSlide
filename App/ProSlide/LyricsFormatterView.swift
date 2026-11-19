@@ -138,7 +138,7 @@ struct LyricsFormatterView: View {
                 paneHeading("2 \u{00B7} Slide preview")
                 Spacer()
                 Picker("Lines per slide", selection: $draft.linesPerSlide) {
-                    ForEach(Array(LyricsParser.linesPerSlideRange), id: \.self) { Text("\($0)").tag($0) }
+                    ForEach(LinesPerSlide.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.menu)
                 .fixedSize()
@@ -177,6 +177,15 @@ struct LyricsFormatterView: View {
                     let count = draft.parsed.droppedLineCount
                     Text("\(count) line\(count == 1 ? "" : "s") before the first label \(count == 1 ? "was" : "were") left out.")
                         .font(.caption).foregroundStyle(.secondary)
+                }
+                if draft.parsed.longSlideCount > 0 {
+                    let count = draft.parsed.longSlideCount
+                    Label(
+                        "\(count) slide\(count == 1 ? " has" : "s have") more than \(LyricsSlide.longLineCount) lines and may need resizing in ProPresenter.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(Color.lyricsWarning)
                 }
                 ForEach(draft.parsed.sections) { section in
                     VStack(alignment: .leading, spacing: 8) {
@@ -273,5 +282,22 @@ private struct SlideCard: View {
                 .padding(8)
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .overlay(alignment: .topTrailing) {
+            if slide.isLong {
+                Label("\(slide.lines.count) lines", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.yellow))
+                    .padding(4)
+                    .help("More than \(LyricsSlide.longLineCount) lines may not fit. Resize the text in ProPresenter after importing.")
+            }
+        }
     }
+}
+
+private extension Color {
+    /// A darker yellow than the system one, which is hard to read on white.
+    static let lyricsWarning = Color(red: 0.72, green: 0.47, blue: 0.12)
 }
