@@ -277,7 +277,10 @@ final class LyricsExportTests: XCTestCase {
         XCTAssertTrue(second.replacedInBin)
         XCTAssertEqual(second.name, "morning SONG", "spaces are tidied")
         XCTAssertEqual(LyricsItem.scan(in: bin).map(\.name), ["morning SONG"])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: LyricsPackage.cardURL(for: first.url).path))
+        // Listed rather than checked by path: a Mac's disk ignores case, so the
+        // old card's path would also find the new one.
+        let files = try FileManager.default.contentsOfDirectory(atPath: bin.path).sorted()
+        XCTAssertEqual(files, [".morning SONG.json", "morning SONG.probundle"], "the old bundle and its card are gone")
     }
 
     func testAnEmptyArtistNeverBecomesPartOfTheName() throws {
