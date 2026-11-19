@@ -8,37 +8,92 @@ import Foundation
 /// shows, so the bin never has to decode a presentation to draw a card.
 public enum LyricsPackage {
 
-    /// What a song's name is changed to when it is taken.
+    /// Where ProPresenter keeps its libraries on a Mac. Every library in it,
+    /// and every folder inside those, is checked for a song's title.
+    public static var proPresenterLibrariesURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Documents/ProPresenter/Libraries", isDirectory: true)
+    }
+
+    /// What a new song can be called, given the names in the ProPresenter libraries.
+    public enum NameCheck: Equatable, Sendable {
+        /// The title is free.
+        case free(String)
+        /// The title is taken, so the song is "Title (Artist)".
+        case withArtist(String)
+        /// The title is taken and there is no artist to tell the songs apart.
+        case needsArtist
+        /// The title and "Title (Artist)" are both taken: the song is already there.
+        case taken(String)
+    }
+
+    /// The title if no library has it, otherwise "Title (Artist)" if that is
+    /// free. Names are compared by `foldedName`. Songs are never numbered.
+    public static func checkName(title: String, artist: String, libraryNames: Set<String>) -> NameCheck {
+        let title = DownloadFileNames.sanitize(title)
+        // The sanitiser names an empty string "Download", so an empty artist
+        // must not go through it.
+        let artist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isTaken = { (name: String) in libraryNames.contains(foldedName(name)) }
+        if !isTaken(title) { return .free(title) }
+        guard !artist.isEmpty else { return .needsArtist }
+        let withArtist = "\(title) (\(DownloadFileNames.sanitize(artist)))"
+        return isTaken(withArtist) ? .taken(withArtist) : .withArtist(withArtist)
+    }
+
+    /// What Create Presentation did.
+    public enum SaveResult: Equatable, Sendable {
+        case saved(Saved)
+        /// Nothing was saved: the title is in a library and there is no artist.
+        case needsArtist
+        /// Nothing was saved: a song with this name is already in a library.
+        case alreadyInLibrary(String)
+    }
+
+    /// A song written into the bin.
     public struct Saved: Equatable, Sendable {
         public let url: URL
         /// The name the song was saved under.
         public let name: String
-        /// Whether `name` differs from the title because the title was taken.
-        public let wasRenamed: Bool
+        /// Whether the artist was added because a library has the title.
+        public let addedArtist: Bool
+        /// Whether a song of the same name in the bin was replaced.
+        public let replacedInBin: Bool
     }
 
     // MARK: - Writing
 
-    /// Writes `song` into `directory` and returns where it went.
-    ///
-    /// - Parameter takenNames: names already used elsewhere, such as the
-    ///   operator's ProPresenter library. A name is taken if it matches one of
-    ///   these or a bundle already in `directory`, compared by `foldedName`.
-    @discardableResult
-    public static func write(_ song: LyricsSong, to directory: URL, takenNames: Set<String> = []) throws -> Saved {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let taken = takenNames.union(names(in: directory))
-        let title = DownloadFileNames.sanitize(song.title)
-        // The sanitiser names an empty title "Download", so an empty artist
-        // must not go through it.
-        let artist = song.artist.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = uniqueName(title: title, artist: artist.isEmpty ? "" : DownloadFileNames.sanitize(artist), taken: taken)
+    /// Checks the song's title against `libraryNames` and, if it can be
+    /// saved, writes it into `directory`.
+    public static func save(_ song: LyricsSong, to directory: URL, libraryNames: Set<String>) throws -> SaveResult {
+        switch checkName(title: song.title, artist: song.artist, libraryNames: libraryNames) {
+        case .free(let name):
+            return .saved(try write(song, as: name, to: directory, addedArtist: false))
+        case .withArtist(let name):
+            return .saved(try write(song, as: name, to: directory, addedArtist: true))
+        case .needsArtist:
+            return .needsArtist
+        case .taken(let name):
+            return .alreadyInLibrary(name)
+        }
+    }
 
+    /// Writes `song` into `directory` as `name`, replacing a song of the same
+    /// name there (compared by `foldedName`): the bin only stages songs on
+    /// their way into ProPresenter, so a second Create is a correction.
+    @discardableResult
+    static func write(_ song: LyricsSong, as name: String, to directory: URL, addedArtist: Bool = false) throws -> Saved {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let manifest = LyricsDocument.encode(name: name, song: song)
         let destination = directory.appendingPathComponent(name).appendingPathExtension(ProPresenterPackage.fileExtension)
         let partial = destination.appendingPathExtension(ProPresenterPackage.partialExtension)
+        let earlier = bundles(in: directory).filter { foldedName($0.deletingPathExtension().lastPathComponent) == foldedName(name) }
         do {
             try ZipWriter.write([ZipWriter.Entry(name: name + ".pro", source: .data(manifest))], to: partial)
+            for bundle in earlier {
+                try FileManager.default.removeItem(at: bundle)
+                try? FileManager.default.removeItem(at: cardURL(for: bundle))
+            }
             try FileManager.default.moveItem(at: partial, to: destination)
         } catch {
             try? FileManager.default.removeItem(at: partial)
@@ -53,19 +108,13 @@ public enum LyricsPackage {
         if let data = try? JSONEncoder().encode(card) {
             try? data.write(to: cardURL(for: destination), options: .atomic)
         }
-        return Saved(url: destination, name: name, wasRenamed: name != title)
+        return Saved(url: destination, name: name, addedArtist: addedArtist, replacedInBin: !earlier.isEmpty)
     }
 
-    /// The title if it is free; otherwise "Title (Artist)"; otherwise
-    /// "Title (2)", "Title (3)" and so on.
-    static func uniqueName(title: String, artist: String, taken: Set<String>) -> String {
-        let isTaken = { (name: String) in taken.contains(foldedName(name)) }
-        if !isTaken(title) { return title }
-        let withArtist = "\(title) (\(artist))"
-        if !artist.isEmpty, !isTaken(withArtist) { return withArtist }
-        var number = 2
-        while isTaken("\(title) (\(number))") { number += 1 }
-        return "\(title) (\(number))"
+    private static func bundles(in directory: URL) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        )) ?? []).filter { $0.pathExtension == ProPresenterPackage.fileExtension }
     }
 
     // MARK: - Names
@@ -86,18 +135,21 @@ public enum LyricsPackage {
         "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
     ]
 
-    /// The folded names of the presentations in `directory`: its `.probundle`
-    /// and `.pro` files. Only names are read, never the files themselves, and
-    /// subfolders are not searched.
-    public static func names(in directory: URL) -> Set<String> {
-        let files = (try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
-        )) ?? []
-        return Set(files.compactMap { url in
-            ["pro", ProPresenterPackage.fileExtension].contains(url.pathExtension.lowercased())
-                ? foldedName(url.deletingPathExtension().lastPathComponent)
-                : nil
-        })
+    /// The folded names of the presentations (`.pro` and `.probundle`) in
+    /// `root` and every folder inside it, or nil if `root` doesn't exist.
+    /// Only names are read, never the files themselves.
+    public static func libraryNames(in root: URL) -> Set<String>? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue,
+              let files = FileManager.default.enumerator(
+                  at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles, .skipsPackageDescendants]
+              ) else { return nil }
+        var names: Set<String> = []
+        for case let url as URL in files
+        where ["pro", ProPresenterPackage.fileExtension].contains(url.pathExtension.lowercased()) {
+            names.insert(foldedName(url.deletingPathExtension().lastPathComponent))
+        }
+        return names
     }
 
     // MARK: - The bin card

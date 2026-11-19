@@ -333,17 +333,19 @@ public final class ConversionQueue: ObservableObject {
 
     // MARK: - Songs
 
-    /// Saves a song from the Lyrics Formatter into the bin and shows it there.
+    /// Saves a song from the Lyrics Formatter into the bin and shows it there,
+    /// unless its title is already in a ProPresenter library (see
+    /// `LyricsPackage.save`).
     ///
-    /// - Parameter libraryFolder: the operator's ProPresenter library, if they
-    ///   chose one. Its presentations' names are read, and nothing else, so a
-    ///   song already in it is saved under another name rather than clashing.
+    /// - Parameter librariesFolder: ProPresenter's Libraries folder. The names
+    ///   of the presentations in it and every folder inside it are read, and
+    ///   nothing else. Nil, or a folder that doesn't exist, checks nothing.
     @discardableResult
-    public func addSong(_ song: LyricsSong, libraryFolder: URL? = nil) throws -> LyricsPackage.Saved {
-        let taken = libraryFolder.map(LyricsPackage.names(in:)) ?? []
-        let saved = try LyricsPackage.write(song, to: binLyricsURL, takenNames: taken)
+    public func addSong(_ song: LyricsSong, librariesFolder: URL?) throws -> LyricsPackage.SaveResult {
+        let names = librariesFolder.flatMap(LyricsPackage.libraryNames(in:)) ?? []
+        let result = try LyricsPackage.save(song, to: binLyricsURL, libraryNames: names)
         songs = LyricsItem.scan(in: binLyricsURL)
-        return saved
+        return result
     }
 
     /// What dragging a song hands over: its bundle, or nil if it has since been deleted.
