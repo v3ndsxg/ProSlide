@@ -175,7 +175,7 @@ public struct ParsedLyrics: Equatable, Sendable {
 ///   slide are 3 + 2. With `.all`, each block is one slide.
 /// - A section repeated word for word, or a label repeated with nothing under
 ///   it, adds no slides. A repeated label with different words is renamed
-///   "Chorus 2".
+///   "Chorus 2", except a Pre-Chorus, which is never numbered.
 /// - CCLI and copyright footer lines never reach a slide. They supply the
 ///   artist and CCLI number when they carry them.
 public enum LyricsParser {
@@ -359,7 +359,7 @@ public enum LyricsParser {
             let text = stripped(line)
             guard !text.isEmpty else { return nil }
             if let groups = Pattern.shortForm.groups(in: text), let kind = shortForms[groups[0]] {
-                return Label(name: name(kind.englishName, number: groups[1]), kind: kind)
+                return Label(name: name(kind.englishName, number: groups[1], kind: kind), kind: kind)
             }
             // "1 Verse" as well as "Verse 1".
             guard let groups = Pattern.numberAndWord.groups(in: text).map({ [$0[1], $0[0]] })
@@ -369,7 +369,7 @@ public enum LyricsParser {
             guard let kind = vocabulary[key] else { return nil }
             let isEnglish = word.contains { ("a"..."z").contains($0) || ("A"..."Z").contains($0) }
             let display = isEnglish && kind != .other ? kind.englishName : tidyCase(word)
-            return Label(name: name(display, number: number), kind: kind)
+            return Label(name: name(display, number: number, kind: kind), kind: kind)
         }
 
         /// The label's words alone: without the brackets around it, a colon or
@@ -386,8 +386,10 @@ public enum LyricsParser {
                 .trimmingCharacters(in: .whitespaces)
         }
 
-        private static func name(_ word: String, number: String) -> String {
-            number.isEmpty ? word : "\(word) \(number)"
+        /// A Pre-Chorus is never numbered: the church's songs only ever have
+        /// one, so "Pre-Chorus 2" and "PC2" are just "Pre-Chorus".
+        private static func name(_ word: String, number: String, kind: LyricsSectionKind) -> String {
+            number.isEmpty || kind == .preChorus ? word : "\(word) \(number)"
         }
 
         /// "VERSE" → "Verse", "приспів" → "Приспів". Mixed case is left alone
@@ -480,7 +482,8 @@ public enum LyricsParser {
             order.append(id)
 
             var name = label.name
-            if !earlier.isEmpty {
+            // A Pre-Chorus with different words keeps its name: it is never numbered.
+            if !earlier.isEmpty, label.kind != .preChorus {
                 let count = earlier.count + 1
                 // "Chorus" → "Chorus 2", but "Verse 1" → "Verse 1 (2)", so it
                 // can't be confused with a real Verse 2.
