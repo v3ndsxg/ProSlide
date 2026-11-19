@@ -82,13 +82,45 @@ public struct LyricsSlide: Equatable, Sendable {
     public let lines: [String]
 
     public var text: String { lines.joined(separator: "\n") }
+
+    /// More lines than this probably won't fit at the slide's font size, so
+    /// the preview warns about it. Only "All lines" can make such a slide.
+    public static let longLineCount = 6
+
+    /// Whether the slide has more than `longLineCount` lines.
+    public var isLong: Bool { lines.count > Self.longLineCount }
+}
+
+/// How many lines go on one slide. Blank lines in the lyrics start a new
+/// slide whichever is chosen.
+public enum LinesPerSlide: Int, CaseIterable, Identifiable, Sendable {
+    case two = 2
+    case four = 4
+    /// No limit: each block of lines between blank lines is one slide, so a
+    /// section without blank lines is a single slide.
+    case all = 0
+
+    public static let `default` = LinesPerSlide.all
+
+    public var id: Int { rawValue }
+
+    /// The most lines on a slide, or nil for no limit.
+    public var limit: Int? { self == .all ? nil : rawValue }
+
+    public var title: String {
+        switch self {
+        case .two: "2 lines"
+        case .four: "4 lines"
+        case .all: "All lines"
+        }
+    }
 }
 
 /// A labelled section of the song, which becomes a ProPresenter group.
 public struct LyricsSection: Equatable, Sendable, Identifiable {
     /// The section's position in the song.
     public let id: Int
-    /// The group name, tidied and ending with a colon: "Verse 1:", "Приспів:".
+    /// The group name, tidied, with no colon: "Verse 1", "Приспів".
     public let name: String
     public let kind: LyricsSectionKind
     public let slides: [LyricsSlide]
@@ -116,6 +148,11 @@ public struct ParsedLyrics: Equatable, Sendable {
     )
 
     public var slideCount: Int { sections.reduce(0) { $0 + $1.slides.count } }
+
+    /// Slides with more lines than `LyricsSlide.longLineCount`.
+    public var longSlideCount: Int {
+        sections.reduce(0) { $0 + $1.slides.filter(\.isLong).count }
+    }
 }
 
 /// Turns lyrics pasted from Planning Center, SongSelect or a document into
@@ -133,25 +170,22 @@ public struct ParsedLyrics: Equatable, Sendable {
 ///   left exactly as pasted.
 /// - A line starting in lowercase joins the line above it, since it was a
 ///   long line cut in two when it was copied.
-/// - Blank lines split slides. A longer block is split evenly into slides of at
-///   most `linesPerSlide` lines, so five lines at four per slide are 3 + 2.
+/// - Blank lines split slides. With a line limit, a longer block is split
+///   evenly into slides of at most that many lines, so five lines at four per
+///   slide are 3 + 2. With `.all`, each block is one slide.
 /// - A section repeated word for word, or a label repeated with nothing under
 ///   it, adds no slides. A repeated label with different words is renamed
-///   "Chorus 2:".
+///   "Chorus 2".
 /// - CCLI and copyright footer lines never reach a slide. They supply the
 ///   artist and CCLI number when they carry them.
 public enum LyricsParser {
-    public static let linesPerSlideRange = 1...6
-    public static let defaultLinesPerSlide = 4
-
-    public static func parse(_ text: String, linesPerSlide: Int = defaultLinesPerSlide) -> ParsedLyrics {
-        let perSlide = min(max(linesPerSlide, linesPerSlideRange.lowerBound), linesPerSlideRange.upperBound)
+    public static func parse(_ text: String, linesPerSlide: LinesPerSlide = .default) -> ParsedLyrics {
         let lines = text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .components(separatedBy: "\n")
 
-        var builder = SectionBuilder(linesPerSlide: perSlide)
+        var builder = SectionBuilder(linesPerSlide: linesPerSlide)
         var footer = FooterReader()
         var current: Label?
         var blocks: [[String]] = []
@@ -315,7 +349,7 @@ public enum LyricsParser {
             let text = stripped(line)
             let words = text.split(separator: " ")
             if (bracketed || colon), !words.isEmpty, words.count <= 3, !text.contains(","), text.contains(where: \.isLetter) {
-                return Label(name: tidyCase(text) + ":", kind: .other)
+                return Label(name: tidyCase(text), kind: .other)
             }
             return nil
         }
@@ -353,7 +387,7 @@ public enum LyricsParser {
         }
 
         private static func name(_ word: String, number: String) -> String {
-            number.isEmpty ? "\(word):" : "\(word) \(number):"
+            number.isEmpty ? word : "\(word) \(number)"
         }
 
         /// "VERSE" → "Verse", "приспів" → "Приспів". Mixed case is left alone
@@ -411,21 +445,21 @@ public enum LyricsParser {
 
     /// Collects sections in order, skipping repeats and naming variants.
     struct SectionBuilder {
-        let linesPerSlide: Int
+        let linesPerSlide: LinesPerSlide
         private(set) var sections: [LyricsSection] = []
         private(set) var order: [Int] = []
-        /// For each label (lowercased, no colon), the words and id of every
+        /// For each label (lowercased), the words and id of every
         /// section that has used it, so a repeat can be recognised.
         private var seen: [String: [(words: [String], id: Int)]] = [:]
         /// For each label, the section it last named.
         private var latest: [String: Int] = [:]
 
-        init(linesPerSlide: Int) {
+        init(linesPerSlide: LinesPerSlide) {
             self.linesPerSlide = linesPerSlide
         }
 
         mutating func add(_ label: Label, blocks: [[String]]) {
-            let base = String(label.name.dropLast())
+            let base = label.name
             let key = base.lowercased()
             // A bare label ("Chorus" with nothing under it) repeats a section,
             // and a label with no lyrics at all ("[Instrumental]") has nothing to show.
@@ -448,10 +482,10 @@ public enum LyricsParser {
             var name = label.name
             if !earlier.isEmpty {
                 let count = earlier.count + 1
-                // "Chorus" → "Chorus 2:", but "Verse 1" → "Verse 1 (2):", so it
+                // "Chorus" → "Chorus 2", but "Verse 1" → "Verse 1 (2)", so it
                 // can't be confused with a real Verse 2.
                 let endsInNumber = base.last?.isNumber ?? false
-                name = endsInNumber ? "\(base) (\(count)):" : "\(base) \(count):"
+                name = endsInNumber ? "\(base) (\(count))" : "\(base) \(count)"
             }
             let slides = blocks.flatMap { LyricsParser.slides(from: $0, linesPerSlide: linesPerSlide) }
             sections.append(LyricsSection(id: id, name: name, kind: label.kind, slides: slides))
@@ -460,19 +494,21 @@ public enum LyricsParser {
 
     /// Splits one block (lines between blank lines) into slides of at most
     /// `linesPerSlide` lines, as evenly as possible: 5 lines at 4 per slide
-    /// are 3 + 2, not 4 + 1. In a block that alternates between Cyrillic and
-    /// Latin lines, each pair (a line and its translation) stays on one slide.
-    static func slides(from block: [String], linesPerSlide: Int) -> [LyricsSlide] {
+    /// are 3 + 2, not 4 + 1. With no limit the block is one slide. In a block
+    /// that alternates between Cyrillic and Latin lines, each pair (a line and
+    /// its translation) stays on one slide.
+    static func slides(from block: [String], linesPerSlide: LinesPerSlide) -> [LyricsSlide] {
+        guard !block.isEmpty else { return [] }
+        guard let limit = linesPerSlide.limit else { return [LyricsSlide(lines: block)] }
         let units: [[String]]
         let unitsPerSlide: Int
         if isBilingual(block) {
             units = stride(from: 0, to: block.count, by: 2).map { Array(block[$0...$0 + 1]) }
-            unitsPerSlide = max(linesPerSlide / 2, 1)
+            unitsPerSlide = max(limit / 2, 1)
         } else {
             units = block.map { [$0] }
-            unitsPerSlide = max(linesPerSlide, 1)
+            unitsPerSlide = max(limit, 1)
         }
-        guard !units.isEmpty else { return [] }
         let slideCount = (units.count + unitsPerSlide - 1) / unitsPerSlide
         let base = units.count / slideCount
         let extra = units.count % slideCount

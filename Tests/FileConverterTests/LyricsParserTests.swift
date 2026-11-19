@@ -22,27 +22,27 @@ final class LyricsParserTests: XCTestCase {
 
     func testEnglishLabelsInEveryFormBecomeTidyGroupNames() {
         let cases: [(String, String, LyricsSectionKind)] = [
-            ("Verse 1", "Verse 1:", .verse),
-            ("VERSE 1:", "Verse 1:", .verse),
-            ("[Verse 1]", "Verse 1:", .verse),
-            ("[Verse 1]:", "Verse 1:", .verse),
-            ("Verse 1 -", "Verse 1:", .verse),
-            ("verse 2", "Verse 2:", .verse),
-            ("Verse", "Verse:", .verse),
-            ("Chorus", "Chorus:", .chorus),
-            ("Pre-Chorus", "Pre-Chorus:", .preChorus),
-            ("PreChorus", "Pre-Chorus:", .preChorus),
-            ("Pre Chorus 2", "Pre-Chorus 2:", .preChorus),
-            ("Bridge", "Bridge:", .bridge),
-            ("Tag:", "Tag:", .tag),
-            ("Intro", "Intro:", .intro),
-            ("Outro", "Outro:", .outro),
-            ("Interlude", "Interlude:", .interlude),
-            ("Ending", "Ending:", .ending),
-            ("Vamp", "Vamp:", .vamp),
-            ("Turnaround", "Turnaround:", .turnaround),
-            ("Chorus x2", "Chorus:", .chorus),
-            ("Chorus (x2)", "Chorus:", .chorus),
+            ("Verse 1", "Verse 1", .verse),
+            ("VERSE 1:", "Verse 1", .verse),
+            ("[Verse 1]", "Verse 1", .verse),
+            ("[Verse 1]:", "Verse 1", .verse),
+            ("Verse 1 -", "Verse 1", .verse),
+            ("verse 2", "Verse 2", .verse),
+            ("Verse", "Verse", .verse),
+            ("Chorus", "Chorus", .chorus),
+            ("Pre-Chorus", "Pre-Chorus", .preChorus),
+            ("PreChorus", "Pre-Chorus", .preChorus),
+            ("Pre Chorus 2", "Pre-Chorus 2", .preChorus),
+            ("Bridge", "Bridge", .bridge),
+            ("Tag:", "Tag", .tag),
+            ("Intro", "Intro", .intro),
+            ("Outro", "Outro", .outro),
+            ("Interlude", "Interlude", .interlude),
+            ("Ending", "Ending", .ending),
+            ("Vamp", "Vamp", .vamp),
+            ("Turnaround", "Turnaround", .turnaround),
+            ("Chorus x2", "Chorus", .chorus),
+            ("Chorus (x2)", "Chorus", .chorus),
         ]
         for (line, name, kind) in cases {
             XCTAssertEqual(label(line), LyricsParser.Label(name: name, kind: kind), line)
@@ -50,25 +50,25 @@ final class LyricsParserTests: XCTestCase {
     }
 
     func testShortFormsExpandToEnglish() {
-        XCTAssertEqual(label("V1"), LyricsParser.Label(name: "Verse 1:", kind: .verse))
-        XCTAssertEqual(label("C"), LyricsParser.Label(name: "Chorus:", kind: .chorus))
-        XCTAssertEqual(label("PC"), LyricsParser.Label(name: "Pre-Chorus:", kind: .preChorus))
-        XCTAssertEqual(label("B"), LyricsParser.Label(name: "Bridge:", kind: .bridge))
-        XCTAssertEqual(label("C2"), LyricsParser.Label(name: "Chorus 2:", kind: .chorus))
+        XCTAssertEqual(label("V1"), LyricsParser.Label(name: "Verse 1", kind: .verse))
+        XCTAssertEqual(label("C"), LyricsParser.Label(name: "Chorus", kind: .chorus))
+        XCTAssertEqual(label("PC"), LyricsParser.Label(name: "Pre-Chorus", kind: .preChorus))
+        XCTAssertEqual(label("B"), LyricsParser.Label(name: "Bridge", kind: .bridge))
+        XCTAssertEqual(label("C2"), LyricsParser.Label(name: "Chorus 2", kind: .chorus))
     }
 
     func testUkrainianAndRussianLabelsKeepTheirOwnWords() {
         let cases: [(String, String, LyricsSectionKind)] = [
-            ("Куплет 1", "Куплет 1:", .verse),
-            ("КУПЛЕТ 2:", "Куплет 2:", .verse),
-            ("Приспів", "Приспів:", .chorus),
-            ("[Припев]", "Припев:", .chorus),
-            ("Передприспів", "Передприспів:", .preChorus),
-            ("Предприпев:", "Предприпев:", .preChorus),
-            ("Бридж", "Бридж:", .bridge),
-            ("Міст", "Міст:", .bridge),
-            ("Кінцівка", "Кінцівка:", .ending),
-            ("Концовка", "Концовка:", .ending),
+            ("Куплет 1", "Куплет 1", .verse),
+            ("КУПЛЕТ 2:", "Куплет 2", .verse),
+            ("Приспів", "Приспів", .chorus),
+            ("[Припев]", "Припев", .chorus),
+            ("Передприспів", "Передприспів", .preChorus),
+            ("Предприпев:", "Предприпев", .preChorus),
+            ("Бридж", "Бридж", .bridge),
+            ("Міст", "Міст", .bridge),
+            ("Кінцівка", "Кінцівка", .ending),
+            ("Концовка", "Концовка", .ending),
         ]
         for (line, name, kind) in cases {
             XCTAssertEqual(label(line), LyricsParser.Label(name: name, kind: kind), line)
@@ -76,22 +76,22 @@ final class LyricsParserTests: XCTestCase {
     }
 
     func testANumberBeforeTheWordIsReadToo() {
-        XCTAssertEqual(label("1 Verse:"), LyricsParser.Label(name: "Verse 1:", kind: .verse))
-        XCTAssertEqual(label("2 Verse"), LyricsParser.Label(name: "Verse 2:", kind: .verse))
-        XCTAssertEqual(label("1 Куплет"), LyricsParser.Label(name: "Куплет 1:", kind: .verse))
+        XCTAssertEqual(label("1 Verse:"), LyricsParser.Label(name: "Verse 1", kind: .verse))
+        XCTAssertEqual(label("2 Verse"), LyricsParser.Label(name: "Verse 2", kind: .verse))
+        XCTAssertEqual(label("1 Куплет"), LyricsParser.Label(name: "Куплет 1", kind: .verse))
         XCTAssertNil(label("23 sings in me"))
     }
 
     /// Planning Center charts put notes for the band after the label's colon.
     func testNotesAfterALabelsColonAreDropped() {
         let cases: [(String, String, LyricsSectionKind)] = [
-            ("Chorus:1х", "Chorus:", .chorus),
-            ("Chorus:2x", "Chorus:", .chorus),
-            ("Chorus: 2x", "Chorus:", .chorus),
-            ("Програш:G", "Програш:", .interlude),
-            ("КУПЛЕТ 1:(соло)", "Куплет 1:", .verse),
-            ("ПРИСПІВ:(разом тихо)", "Приспів:", .chorus),
-            ("БРІДЖ:3р. (1,2-голосно 3-тихо)", "Брідж:", .bridge),
+            ("Chorus:1х", "Chorus", .chorus),
+            ("Chorus:2x", "Chorus", .chorus),
+            ("Chorus: 2x", "Chorus", .chorus),
+            ("Програш:G", "Програш", .interlude),
+            ("КУПЛЕТ 1:(соло)", "Куплет 1", .verse),
+            ("ПРИСПІВ:(разом тихо)", "Приспів", .chorus),
+            ("БРІДЖ:3р. (1,2-голосно 3-тихо)", "Брідж", .bridge),
         ]
         for (line, name, kind) in cases {
             XCTAssertEqual(label(line), LyricsParser.Label(name: name, kind: kind), line)
@@ -100,14 +100,14 @@ final class LyricsParserTests: XCTestCase {
     }
 
     func testMiscIsAGreyGroup() {
-        XCTAssertEqual(label("Misc 1"), LyricsParser.Label(name: "Misc 1:", kind: .other))
-        XCTAssertEqual(label("MISC"), LyricsParser.Label(name: "Misc:", kind: .other))
+        XCTAssertEqual(label("Misc 1"), LyricsParser.Label(name: "Misc 1", kind: .other))
+        XCTAssertEqual(label("MISC"), LyricsParser.Label(name: "Misc", kind: .other))
     }
 
     func testUnknownLabelsAreGreyAndNamedAsWritten() {
-        XCTAssertEqual(label("[Hook]"), LyricsParser.Label(name: "Hook:", kind: .other))
-        XCTAssertEqual(label("[SPONTANEOUS]"), LyricsParser.Label(name: "Spontaneous:", kind: .other))
-        XCTAssertEqual(label("Spontaneous Worship:"), LyricsParser.Label(name: "Spontaneous Worship:", kind: .other))
+        XCTAssertEqual(label("[Hook]"), LyricsParser.Label(name: "Hook", kind: .other))
+        XCTAssertEqual(label("[SPONTANEOUS]"), LyricsParser.Label(name: "Spontaneous", kind: .other))
+        XCTAssertEqual(label("Spontaneous Worship:"), LyricsParser.Label(name: "Spontaneous Worship", kind: .other))
     }
 
     func testLyricLinesAreNotMistakenForLabels() {
@@ -203,7 +203,7 @@ final class LyricsParserTests: XCTestCase {
         Let the whole world hear
         """)
         XCTAssertTrue(parsed.foundLabels)
-        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1:", "Chorus:"])
+        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1", "Chorus"])
         XCTAssertEqual(parsed.sections.map(\.kind), [.verse, .chorus])
         XCTAssertEqual(lines(parsed), [
             [["Morning breaks across the hills", "Every shadow runs away",
@@ -215,22 +215,37 @@ final class LyricsParserTests: XCTestCase {
 
     func testLongBlocksSplitEvenly() {
         let verse = "Verse 1\nOne\nTwo\nThree\nFour\nFive"
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 4)), [[["One", "Two", "Three"], ["Four", "Five"]]])
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 2)), [[["One", "Two"], ["Three", "Four"], ["Five"]]])
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 1)), [[["One"], ["Two"], ["Three"], ["Four"], ["Five"]]])
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: .four)), [[["One", "Two", "Three"], ["Four", "Five"]]])
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: .two)), [[["One", "Two"], ["Three", "Four"], ["Five"]]])
         let nine = "Verse 1\n" + (1...9).map(String.init).joined(separator: "\n")
-        XCTAssertEqual(LyricsParser.parse(nine, linesPerSlide: 4).sections[0].slides.map(\.lines.count), [3, 3, 3])
+        XCTAssertEqual(LyricsParser.parse(nine, linesPerSlide: .four).sections[0].slides.map(\.lines.count), [3, 3, 3])
+    }
+
+    func testAllLinesPutsAWholeSectionOnOneSlide() {
+        let verse = "Verse 1\nOne\nTwo\nThree\nFour\nFive"
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: .all)), [[["One", "Two", "Three", "Four", "Five"]]])
     }
 
     func testBlankLinesSplitSlidesWithinASection() {
-        let parsed = LyricsParser.parse("Verse 1\nOne\nTwo\n\nThree\nFour", linesPerSlide: 4)
-        XCTAssertEqual(lines(parsed), [[["One", "Two"], ["Three", "Four"]]])
+        let verse = "Verse 1\nOne\nTwo\n\nThree\nFour"
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: .four)), [[["One", "Two"], ["Three", "Four"]]])
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: .all)), [[["One", "Two"], ["Three", "Four"]]],
+                       "the musicians put the blank line there on purpose")
     }
 
-    func testLinesPerSlideIsKeptInRange() {
-        let verse = "Verse 1\nOne\nTwo"
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 0)), [[["One"], ["Two"]]])
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 99)), [[["One", "Two"]]])
+    func testTheMenuOffersTwoFourAndAllLines() {
+        XCTAssertEqual(LinesPerSlide.allCases, [.two, .four, .all])
+        XCTAssertEqual(LinesPerSlide.allCases.map(\.title), ["2 lines", "4 lines", "All lines"])
+        XCTAssertEqual(LinesPerSlide.default, .all)
+    }
+
+    func testSlidesOverSixLinesAreLong() {
+        let seven = "Verse 1\n" + (1...7).map { "Line \($0)" }.joined(separator: "\n")
+        let six = "Chorus\n" + (1...6).map { "Line \($0)" }.joined(separator: "\n")
+        let parsed = LyricsParser.parse(seven + "\n\n" + six, linesPerSlide: .all)
+        XCTAssertEqual(parsed.sections.flatMap(\.slides).map(\.isLong), [true, false])
+        XCTAssertEqual(parsed.longSlideCount, 1)
+        XCTAssertEqual(LyricsParser.parse(seven, linesPerSlide: .four).longSlideCount, 0)
     }
 
     func testLinesBeforeTheFirstLabelAreLeftOut() {
@@ -278,7 +293,7 @@ final class LyricsParserTests: XCTestCase {
         Verse 2
         A different second verse
         """)
-        XCTAssertEqual(parsed.sections.map(\.name), ["Chorus:", "Verse 2:", "Chorus 2:", "Verse 2 (2):"])
+        XCTAssertEqual(parsed.sections.map(\.name), ["Chorus", "Verse 2", "Chorus 2", "Verse 2 (2)"])
         XCTAssertEqual(parsed.sections.map(\.id), [0, 1, 2, 3])
     }
 
@@ -305,7 +320,7 @@ final class LyricsParserTests: XCTestCase {
         ПРОГРАШ:
         БРІДЖ:3р. (1,2-голосно 3-тихо)
         """)
-        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1:", "Pre-Chorus:", "Chorus:", "Verse 2:", "Брідж:"])
+        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1", "Pre-Chorus", "Chorus", "Verse 2", "Брідж"])
         XCTAssertEqual(lines(parsed), [
             [["Світло моє, Ти що в серці,", "Сила моя"]],
             [["Ти ведеш мене"]],
@@ -327,13 +342,13 @@ final class LyricsParserTests: XCTestCase {
     }
 
     func testALowercaseLineAfterABlankLineStartsANewSlide() {
-        let parsed = LyricsParser.parse("Verse 1\nfirst slide\n\nsecond slide", linesPerSlide: 4)
+        let parsed = LyricsParser.parse("Verse 1\nfirst slide\n\nsecond slide", linesPerSlide: .all)
         XCTAssertEqual(lines(parsed), [[["first slide"], ["second slide"]]])
     }
 
     func testALabelWithNothingUnderItAddsNoGroup() {
         let parsed = LyricsParser.parse("[Instrumental]\n\nVerse 1\nMorning breaks")
-        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1:"])
+        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1"])
     }
 
     func testBilingualPairsStayOnOneSlide() {
@@ -346,11 +361,12 @@ final class LyricsParserTests: XCTestCase {
         Ти мій Спас
         You are my Savior
         """
-        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: 4)), [[
+        XCTAssertEqual(lines(LyricsParser.parse(verse, linesPerSlide: .four)), [[
             ["Ти мій Бог", "You are my God", "Ти мій Цар", "You are my King"],
             ["Ти мій Спас", "You are my Savior"],
         ]])
-        XCTAssertEqual(LyricsParser.parse(verse, linesPerSlide: 1).sections[0].slides.map(\.lines.count), [2, 2, 2])
+        XCTAssertEqual(LyricsParser.parse(verse, linesPerSlide: .two).sections[0].slides.map(\.lines.count), [2, 2, 2])
+        XCTAssertEqual(LyricsParser.parse(verse, linesPerSlide: .all).sections[0].slides.map(\.lines.count), [6])
         XCTAssertFalse(LyricsParser.isBilingual(["Ти мій Бог", "Ти мій Цар"]))
         XCTAssertFalse(LyricsParser.isBilingual(["Ти мій Бог", "You are my God", "Ти мій Цар"]))
     }
@@ -428,23 +444,32 @@ final class LyricsDraftTests: XCTestCase {
     Jane Doe | John Smith
     """
 
-    func testLinesPerSlideDefaultsToFourAndIsRemembered() throws {
+    func testLinesPerSlideDefaultsToAllLinesAndIsRemembered() throws {
         let defaults = try makeDefaults()
         let draft = LyricsDraft(defaults: defaults)
-        XCTAssertEqual(draft.linesPerSlide, 4)
-        draft.linesPerSlide = 2
-        XCTAssertEqual(LyricsDraft(defaults: defaults).linesPerSlide, 2)
+        XCTAssertEqual(draft.linesPerSlide, .all)
+        draft.linesPerSlide = .two
+        XCTAssertEqual(LyricsDraft(defaults: defaults).linesPerSlide, .two)
+        draft.linesPerSlide = .four
+        XCTAssertEqual(LyricsDraft(defaults: defaults).linesPerSlide, .four)
+    }
 
-        defaults.set(9, forKey: "lyricsLinesPerSlide")
-        XCTAssertEqual(LyricsDraft(defaults: defaults).linesPerSlide, 4)
+    func testAnOldLinesPerSlideChoiceFallsBackToAllLines() throws {
+        let defaults = try makeDefaults()
+        for old in [1, 3, 5, 6, 9] {
+            defaults.set(old, forKey: "lyricsLinesPerSlide")
+            XCTAssertEqual(LyricsDraft(defaults: defaults).linesPerSlide, .all, "\(old)")
+        }
     }
 
     func testChangingLinesPerSlideReparses() throws {
         let draft = LyricsDraft(defaults: try makeDefaults())
-        draft.lyrics = "Verse 1\nOne\nTwo\nThree\nFour"
+        draft.lyrics = "Verse 1\nOne\nTwo\nThree\nFour\nFive"
         XCTAssertEqual(draft.parsed.slideCount, 1)
-        draft.linesPerSlide = 2
+        draft.linesPerSlide = .four
         XCTAssertEqual(draft.parsed.slideCount, 2)
+        draft.linesPerSlide = .two
+        XCTAssertEqual(draft.parsed.slideCount, 3)
     }
 
     func testAFooterFillsEmptyDetails() throws {

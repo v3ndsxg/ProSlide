@@ -25,7 +25,7 @@ final class LyricsExportTests: XCTestCase {
     """
 
     private func song(title: String = "Morning Song", artist: String = "Jane Doe", ccli: String = "1234567") -> LyricsSong {
-        let parsed = LyricsParser.parse(lyrics, linesPerSlide: 4)
+        let parsed = LyricsParser.parse(lyrics, linesPerSlide: .four)
         return LyricsSong(title: title, artist: artist, ccliNumber: ccli, sections: parsed.sections, order: parsed.order)
     }
 
@@ -50,7 +50,7 @@ final class LyricsExportTests: XCTestCase {
 
     func testTheParserRecordsThePastedOrder() {
         let parsed = LyricsParser.parse(lyrics)
-        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1:", "Chorus:", "Приспів:"])
+        XCTAssertEqual(parsed.sections.map(\.name), ["Verse 1", "Chorus", "Приспів"])
         XCTAssertEqual(parsed.order, [0, 1, 2, 1], "the bare Chorus at the end names the Chorus again")
     }
 
@@ -58,7 +58,7 @@ final class LyricsExportTests: XCTestCase {
         let document = try decode(song())
         XCTAssertEqual(document.string(3), "Morning Song")
         let groups = try document.messages(12).map { try XCTUnwrap($0.message(1)) }
-        XCTAssertEqual(groups.map { $0.string(2) }, ["Blank", "Verse 1:", "Chorus:", "Приспів:"])
+        XCTAssertEqual(groups.map { $0.string(2) }, ["Blank", "Verse 1", "Chorus", "Приспів"])
 
         let expected: [LyricsSectionKind] = [.other, .verse, .chorus, .chorus]
         for (group, kind) in zip(groups, expected) {
