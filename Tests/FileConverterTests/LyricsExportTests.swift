@@ -94,10 +94,11 @@ final class LyricsExportTests: XCTestCase {
 
     func testEachSlideIsOneCentredTextBoxFillingTheCanvas() throws {
         let document = try decode(song())
-        for cue in try document.messages(13) {
+        for (index, cue) in try document.messages(13).enumerated() {
             XCTAssertTrue(cue.bool(12), "enabled")
             let actions = try cue.messages(10)
-            XCTAssertEqual(actions.map { $0.uint(9) }, [11], "one presentation-slide action, no media")
+            // The Blank slide runs the Worship macro after its slide.
+            XCTAssertEqual(actions.map { $0.uint(9) }, index == 0 ? [11, 23] : [11], "the slide first, no media")
             let base = try XCTUnwrap(actions[0].message(23)?.message(2)?.message(1))
             let canvas = try XCTUnwrap(base.message(6))
             XCTAssertEqual(canvas.double(1), 1920)
@@ -119,6 +120,21 @@ final class LyricsExportTests: XCTestCase {
             XCTAssertEqual(font.string(1), "Lato-Bold")
             XCTAssertEqual(font.double(2), 60)
         }
+    }
+
+    func testOnlyTheBlankSlideRunsTheWorshipMacro() throws {
+        let cues = try decode(song()).messages(13)
+        let macros = try cues.map { cue in try cue.messages(10).filter { $0.uint(9) == 23 } }
+        XCTAssertEqual(macros.map(\.count), [1] + Array(repeating: 0, count: cues.count - 1))
+
+        let action = try XCTUnwrap(macros.first?.first)
+        XCTAssertTrue(action.bool(6), "enabled")
+        let element = try XCTUnwrap(action.message(40)?.message(1))
+        XCTAssertEqual(try element.message(1)?.string(1), "71CCD16C-F489-4C32-953E-DD884BB67F7C")
+        XCTAssertEqual(element.string(2), "Worship")
+        let folder = try XCTUnwrap(element.message(3))
+        XCTAssertEqual(try folder.message(1)?.string(1), "02828449-EA6F-4A76-9CA0-9196E97A53AB")
+        XCTAssertEqual(folder.string(2), "SFGC MACROS")
     }
 
     func testTheTextAttributesCoverTheWholeTextInUTF16() throws {

@@ -20,7 +20,8 @@ It checks:
 - The images: each one is a complete JPEG with a real size.
 - A lyrics bundle (a `.pro` and nothing else, as the Lyrics Formatter writes):
   each cue is one text slide whose RTF parses, and whose text attributes cover
-  exactly its text; every cue is in one group, and the arrangement names only
+  exactly its text; the first cue (Blank) may also run one macro, named by a
+  UUID and a name; every cue is in one group, and the arrangement names only
   groups that exist.
 - The `.pro`: it decodes, it is named after its file, and every UUID in it is
   well formed and unique. The cue group lists the cues in their own order.
@@ -46,6 +47,7 @@ UTF8_FLAG = 1 << 11
 ROOT_SHOW = 10
 ACTION_MEDIA = 2
 ACTION_PRESENTATION_SLIDE = 11
+ACTION_MACRO = 23
 LAYER_FOREGROUND = 1
 UUID = re.compile(r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$")
 
@@ -466,9 +468,23 @@ def check_lyrics_manifest(raw, manifest_name, problems):
             problems.append(f"{where}: disabled")
         actions = cue.messages(10)
         kinds = [action.uint(9) for action in actions]
-        if kinds != [ACTION_PRESENTATION_SLIDE]:
-            problems.append(f"{where}: actions are {kinds}, expected one text slide {[ACTION_PRESENTATION_SLIDE]}")
+        allowed = [[ACTION_PRESENTATION_SLIDE]]
+        if index == 1:
+            # The Blank slide may run a macro after its slide.
+            allowed.append([ACTION_PRESENTATION_SLIDE, ACTION_MACRO])
+        if kinds not in allowed:
+            problems.append(f"{where}: actions are {kinds}, expected one of {allowed}")
             continue
+        for macro in actions[1:]:
+            uuid(macro.message(1), f"{where} macro action")
+            if not macro.uint(6):
+                problems.append(f"{where}: macro action disabled")
+            element = macro.message(40, 1)
+            # The macro's own identifiers come from the operator's ProPresenter
+            # and are the same in every song, so they need not be unique.
+            uuid(element.message(1) if element else None, f"{where} macro", unique=False)
+            if not element or not element.string(2):
+                problems.append(f"{where}: the macro has no name")
         action = actions[0]
         uuid(action.message(1), f"{where} slide action")
         if not action.uint(6):

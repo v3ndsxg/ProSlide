@@ -48,6 +48,8 @@ enum LyricsDocument {
 
     /// `rv.data.Action.ActionType.ACTION_TYPE_PRESENTATION_SLIDE`.
     private static let presentationSlideAction: UInt64 = 11
+    /// `rv.data.Action.ActionType.ACTION_TYPE_MACRO`.
+    private static let macroAction: UInt64 = 23
     /// `rv.data.Cue.CompletionActionType`, as the export has it.
     private static let completionLast: UInt64 = 1
     /// `Graphics.Text.Attributes.Paragraph.Alignment.CENTER`.
@@ -66,6 +68,27 @@ enum LyricsDocument {
 
     static let blankGroupName = "Blank"
     static let arrangementName = "Default"
+
+    /// A ProPresenter macro, as an action names it: by the identifier the
+    /// operator's ProPresenter gave it, with its name and folder.
+    struct Macro: Equatable {
+        let uuid: String
+        let name: String
+        let folderUUID: String
+        let folderName: String
+    }
+
+    /// The church's "Worship" view macro, run by every song's Blank slide.
+    /// Copied from a song exported from the ProPresenter Mac ("Owe You
+    /// Everything", November 2026). The identifiers are that Mac's own: if the
+    /// macro is deleted and made again there, it gets new ones and these must
+    /// be copied again from a fresh export.
+    static let worshipMacro = Macro(
+        uuid: "71CCD16C-F489-4C32-953E-DD884BB67F7C",
+        name: "Worship",
+        folderUUID: "02828449-EA6F-4A76-9CA0-9196E97A53AB",
+        folderName: "SFGC MACROS"
+    )
 
     // MARK: - Entry point
 
@@ -120,9 +143,11 @@ enum LyricsDocument {
                 }
             }
         }
-        for group in groups {
+        for (index, group) in groups.enumerated() {
+            // Only the Blank slide runs a macro.
+            let macro = index == 0 ? worshipMacro : nil
             for (lines, cueUUID) in zip(group.slides, group.cueUUIDs) {
-                document.data(13, cue(lines: lines, uuid: cueUUID))
+                document.data(13, cue(lines: lines, uuid: cueUUID, macro: macro))
             }
         }
 
@@ -138,8 +163,9 @@ enum LyricsDocument {
 
     // MARK: - Cues
 
-    /// One slide. `lines` is empty for the Blank slide.
-    private static func cue(lines: [String], uuid: String) -> Data {
+    /// One slide. `lines` is empty for the Blank slide. A `macro` is a second
+    /// action after the slide's own, as ProPresenter's export has it.
+    private static func cue(lines: [String], uuid: String, macro: Macro? = nil) -> Data {
         var cue = ProtoWriter()
         cue.message(1) { $0.string(1, uuid) }
         cue.uint(5, completionLast)
@@ -159,6 +185,25 @@ enum LyricsDocument {
                         baseSlide.message(7) { $0.string(1, newUUID()) }
                     }
                     presentationSlide.message(4) { $0.uint(3, 1) }
+                }
+            }
+        }
+        if let macro {
+            cue.message(10) { action in
+                action.message(1) { $0.string(1, newUUID()) }
+                action.bool(6, true)  // enabled
+                action.uint(9, macroAction)
+                // `rv.data.Action.MacroType`: its `CollectionElementType`,
+                // the macro and then the folder it is in.
+                action.message(40) { macroType in
+                    macroType.message(1) { element in
+                        element.message(1) { $0.string(1, macro.uuid) }
+                        element.string(2, macro.name)
+                        element.message(3) { folder in
+                            folder.message(1) { $0.string(1, macro.folderUUID) }
+                            folder.string(2, macro.folderName)
+                        }
+                    }
                 }
             }
         }
