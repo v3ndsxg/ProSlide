@@ -141,6 +141,12 @@ public enum BinStorage {
         bin.deletingLastPathComponent().appendingPathComponent("Downloads", isDirectory: true)
     }
 
+    /// Where the Lyrics Formatter's songs are kept, beside `Bin`, `Pro` and
+    /// `Downloads`, for the same reasons as `downloadsDirectory(besideBin:)`.
+    public static func lyricsDirectory(besideBin bin: URL) -> URL {
+        bin.deletingLastPathComponent().appendingPathComponent("Lyrics", isDirectory: true)
+    }
+
     /// Where the `.probundle` files are written.
     ///
     /// Deliberately *outside* each deck's folder. ProPresenter imports a folder

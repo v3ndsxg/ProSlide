@@ -21,12 +21,14 @@ struct ProSlideApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var queue = ConversionQueue()
     @StateObject private var downloads = DownloadQueue()
+    @StateObject private var lyrics = LyricsDraft()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(queue)
                 .environmentObject(downloads)
+                .environmentObject(lyrics)
                 // A finished download is a new file for the bin to show.
                 .task { downloads.onBinChanged = { [queue] in queue.reloadBin() } }
                 .frame(minWidth: 1000, minHeight: 640)
