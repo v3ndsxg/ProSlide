@@ -1,5 +1,5 @@
 # ProSlide
-A macOS app that converts PDF and PowerPoint files into JPEG images for ProPresenter, and packages each deck as a ProPresenter `.probundle` presentation. Its Downloader saves videos and audio from YouTube and most social media sites into the same bin.
+A macOS app that converts PDF and PowerPoint files into JPEG images for ProPresenter, and packages each deck as a ProPresenter `.probundle` presentation. Its Downloader saves videos and audio from YouTube and most social media sites into the same bin. Its Lyrics Formatter turns pasted song lyrics into a ProPresenter presentation.
 
 ## Install
 
@@ -48,6 +48,7 @@ A drag hands over a single item, which is why a whole deck travels as one bundle
 - JPEGs: `~/Documents/ProSlide/Bin/<Name> JPEGs/`, holding JPEGs and nothing else.
 - Presentations: `~/Documents/ProSlide/Pro/<Name>.probundle`. They're kept apart from the JPEG folders because ProPresenter imports a folder holding a presentation as that presentation. Each bundle has its own copy of the JPEGs, so a deck takes about twice the space until you **Clear**.
 - Downloads: `~/Documents/ProSlide/Downloads/<Title>.mp4` or `.mp3`, beside `Bin` and `Pro`. Each download works in a hidden `.work` folder and is moved in only when finished, so the bin never shows a partial file.
+- Songs: `~/Documents/ProSlide/Lyrics/<Title>.probundle`, from the Lyrics Formatter (see [Lyrics Formatter](#lyrics-formatter)).
 - All of these are under Documents because ProPresenter opens these paths itself, and macOS won't let it into another app's container. Decks in the old location (`~/Library/Application Support/FileConverter/Bin`) are moved across on the first scan.
 
 ## How the bundle works
@@ -82,6 +83,27 @@ The **Downloader** tab saves videos as MP4 or just their audio as MP3, from YouT
 - **Updating the tools:** run `Scripts/update-tools.sh` to print the newest stable versions and checksums, compare them with each project's release page, and change `tools.lock` in a pull request. Stable `yt-dlp` releases can lag behind YouTube changes, so a site that stops working may need a newer release.
 - **Rights:** only download videos you own or have permission to use. YouTube's terms don't allow downloading, and `yt-dlp` and `ffmpeg` are GPL programs; if you give a built app to other people, include their licenses and sources, as the notices file points out.
 
+## Lyrics Formatter
+The **Lyrics Formatter** tab turns pasted lyrics into a ProPresenter presentation, with a group for each section.
+
+1. Fill in the **Song title**. **Artist** and **CCLI number** are optional, and are filled in from a CCLI footer in the pasted lyrics when they're empty.
+2. Paste the lyrics into **1 · Paste lyrics**, with each section's label on its own line above it.
+3. **2 · Slide preview** shows each group and its slides as you type. Choose **Lines per slide** above it: **2 lines**, **4 lines** or **All lines** (the default). A slide with more than 6 lines gets a yellow warning, since it may need resizing in ProPresenter.
+4. Press **Create Presentation** (⌘↩). The song appears in the bin as a **LYRICS** card; drag it into ProPresenter. Right-click it for **Show in Finder**, **Save a copy…** and **Remove**.
+
+- **Labels:** Verse, Pre-Chorus, Chorus, Bridge, Tag, Intro, Outro, Interlude, Ending, Vamp and Turnaround, numbered or not, written `Verse 1`, `1 Verse`, `VERSE 1:`, `[Verse 1]` or `Verse 1 -`, plus `V1`, `C`, `PC` and `B`, and their Ukrainian and Russian names (Куплет, Приспів, Припев, Бридж and so on). Groups are named as written and tidied, with no colon (**Verse 1**, **Приспів**). A note after a label's colon (`Chorus:2x`, `КУПЛЕТ 1:(соло)`) is dropped. Planning Center's **Misc**, and any other short label in `[ ]` or ending with a colon, becomes a grey group. Lines before the first label are left out, and lyrics with no labels at all show a warning.
+- **Cleanup:** anything in `( )` goes, as do repeat markers (`x2`, `2x`, `×3`), hyphens inside words (`Hal-le-lu-jah` becomes `Hallelujah`) and every character except letters, digits, spaces, commas and apostrophes. Capitalisation is left as pasted. CCLI and copyright lines never reach a slide.
+- **Slides:** a line starting in lowercase is joined to the line above, since it is usually a long line that was cut in two when it was copied. Blank lines always split slides. With **All lines**, each block between blank lines is one slide, so a section with no blank lines is a single slide. With **2 lines** or **4 lines**, a longer block is split evenly (five lines at four per slide are 3 + 2). A section repeated word for word adds no slides; a repeated label with different words becomes, for example, **Chorus 2**. A Pre-Chorus is never numbered: **Pre-Chorus 2** or **PC2** is just **Pre-Chorus**. A line and its translation, in a block that alternates Ukrainian and English, stay on one slide.
+- **Colours:** Verse blue, Chorus pink, Pre-Chorus light pink, Bridge purple, Interlude, Vamp and Turnaround green, Intro, Outro and Ending yellow, Tag orange, anything else grey.
+- **The presentation:** a `.probundle` holding one `.pro` and no media. Each slide is one text box filling the 1920×1080 slide in Lato Bold 60 pt, white, centred across and down, with a soft shadow, copied from a song exported from ProPresenter; a theme applied in ProPresenter restyles it. It starts with a **Blank** group holding one empty slide, which runs the church's **Worship** view macro (from the **SFGC MACROS** folder), and has one arrangement, **Default**, following the order the lyrics name the sections in (a bare repeated label such as `Chorus:2x` adds the Chorus again; the repeat count itself doesn't). The title, artist (as Author) and CCLI number are stored in the presentation's CCLI info with **display** off, so no footer shows.
+- **Names:** songs are kept in `~/Documents/ProSlide/Lyrics/` beside `Bin`, `Pro` and `Downloads`. **Create Presentation** first checks the title against every ProPresenter library in `~/Documents/ProPresenter/Libraries/`, including the folders inside them:
+  - Not there: the song is saved as typed.
+  - There, with an artist entered: the song is saved as "Title (Artist)".
+  - There, with no artist: nothing is saved, and a popup asks for an artist name.
+  - "Title (Artist)" is there too: nothing is saved, and a popup says the song already exists.
+
+  Only an exact title counts: "Holy" doesn't match "Holy Spirit", and "Song" doesn't match "Song (Someone)". Titles that differ only in case or spacing, or in a Latin letter typed for a Cyrillic one that looks the same, count as the same. Songs are never numbered. A song of the same name already in ProSlide's bin is replaced, since the bin only stages songs on their way into ProPresenter. ProSlide reads only the names of the presentations in the libraries, never their contents, and never writes there. If the Libraries folder doesn't exist, as on a Mac without ProPresenter, songs are saved without the check, and the row under the details says so.
+
 ## Conversion
 - **PDF:** PDFKit and Core Graphics render each page to JPEG, using the page's crop box and honouring its rotation.
 - **PPTX and PPT:** LibreOffice runs headless to make a temporary PDF, which is rendered the same way. A batch shares one LibreOffice profile, and a conversion that takes over five minutes is stopped.
@@ -92,7 +114,7 @@ The **Downloader** tab saves videos as MP4 or just their audio as MP3, from YouT
 ## Layout
 - `App/ProSlide/`: the SwiftUI app.
 - `App/ProSlide.xcodeproj`: development only (breakpoints, previews).
-- `Sources/FileConverterCore/`: the conversion engine, batch queue and `.probundle` packaging, plus the Downloader's engine and queue.
+- `Sources/FileConverterCore/`: the conversion engine, batch queue and `.probundle` packaging, plus the Downloader's engine and queue and the Lyrics Formatter's parser and song writer.
 - `Tests/FileConverterTests/`: tests and fixtures.
 - `Scripts/make-app-bundle.sh`: builds `ProSlide.app` from `swift build`.
 - `Scripts/check-probundle.py`: checks `.probundle` files with no Swift and no Mac (see below).
@@ -131,26 +153,7 @@ python3 -I Scripts/check-probundle.py Deck.probundle   # or a folder of them
 ## Beta
 New work is tested on the `beta` branch, built as a separate app, and reaches `main` once it has proven out.
 
-### Lyrics Formatter
-The **Lyrics Formatter** tab turns pasted lyrics into a ProPresenter presentation, with a group for each section.
-
-1. Fill in the **Song title**. **Artist** and **CCLI number** are optional, and are filled in from a CCLI footer in the pasted lyrics when they're empty.
-2. Paste the lyrics into **1 · Paste lyrics**, with each section's label on its own line above it.
-3. **2 · Slide preview** shows each group and its slides as you type. Choose **Lines per slide** above it: **2 lines**, **4 lines** or **All lines** (the default). A slide with more than 6 lines gets a yellow warning, since it may need resizing in ProPresenter.
-4. Press **Create Presentation** (⌘↩). The song appears in the bin as a **LYRICS** card; drag it into ProPresenter. Right-click it for **Show in Finder**, **Save a copy…** and **Remove**.
-
-- **Labels:** Verse, Pre-Chorus, Chorus, Bridge, Tag, Intro, Outro, Interlude, Ending, Vamp and Turnaround, numbered or not, written `Verse 1`, `1 Verse`, `VERSE 1:`, `[Verse 1]` or `Verse 1 -`, plus `V1`, `C`, `PC` and `B`, and their Ukrainian and Russian names (Куплет, Приспів, Припев, Бридж and so on). Groups are named as written and tidied, with no colon (**Verse 1**, **Приспів**). A note after a label's colon (`Chorus:2x`, `КУПЛЕТ 1:(соло)`) is dropped. Planning Center's **Misc**, and any other short label in `[ ]` or ending with a colon, becomes a grey group. Lines before the first label are left out, and lyrics with no labels at all show a warning.
-- **Cleanup:** anything in `( )` goes, as do repeat markers (`x2`, `2x`, `×3`), hyphens inside words (`Hal-le-lu-jah` becomes `Hallelujah`) and every character except letters, digits, spaces, commas and apostrophes. Capitalisation is left as pasted. CCLI and copyright lines never reach a slide.
-- **Slides:** a line starting in lowercase is joined to the line above, since it is usually a long line that was cut in two when it was copied. Blank lines always split slides. With **All lines**, each block between blank lines is one slide, so a section with no blank lines is a single slide. With **2 lines** or **4 lines**, a longer block is split evenly (five lines at four per slide are 3 + 2). A section repeated word for word adds no slides; a repeated label with different words becomes, for example, **Chorus 2**. A Pre-Chorus is never numbered: **Pre-Chorus 2** or **PC2** is just **Pre-Chorus**. A line and its translation, in a block that alternates Ukrainian and English, stay on one slide.
-- **Colours:** Verse blue, Chorus pink, Pre-Chorus light pink, Bridge purple, Interlude, Vamp and Turnaround green, Intro, Outro and Ending yellow, Tag orange, anything else grey.
-- **The presentation:** a `.probundle` holding one `.pro` and no media. Each slide is one text box filling the 1920×1080 slide in Lato Bold 60 pt, white, centred across and down, with a soft shadow, copied from a song exported from ProPresenter; a theme applied in ProPresenter restyles it. It starts with a **Blank** group holding one empty slide, which runs the church's **Worship** view macro (from the **SFGC MACROS** folder), and has one arrangement, **Default**, following the order the lyrics name the sections in (a bare repeated label such as `Chorus:2x` adds the Chorus again; the repeat count itself doesn't). The title, artist (as Author) and CCLI number are stored in the presentation's CCLI info with **display** off, so no footer shows.
-- **Names:** songs are kept in `~/Documents/ProSlide/Lyrics/` beside `Bin`, `Pro` and `Downloads`. **Create Presentation** first checks the title against every ProPresenter library in `~/Documents/ProPresenter/Libraries/`, including the folders inside them:
-  - Not there: the song is saved as typed.
-  - There, with an artist entered: the song is saved as "Title (Artist)".
-  - There, with no artist: nothing is saved, and a popup asks for an artist name.
-  - "Title (Artist)" is there too: nothing is saved, and a popup says the song already exists.
-
-  Only an exact title counts: "Holy" doesn't match "Holy Spirit", and "Song" doesn't match "Song (Someone)". Titles that differ only in case or spacing, or in a Latin letter typed for a Cyrillic one that looks the same, count as the same. Songs are never numbered. A song of the same name already in ProSlide's bin is replaced, since the bin only stages songs on their way into ProPresenter. ProSlide reads only the names of the presentations in the libraries, never their contents, and never writes there. If the Libraries folder doesn't exist, as on a Mac without ProPresenter, songs are saved without the check, and the row under the details says so.
+Nothing is waiting in beta right now: everything above is in the production app.
 
 ### Installing the beta
 The beta is a separate app, **ProSlide Beta**, with its own bundle ID (`com.v3ndsxg.proslide.beta`), an orange icon marked BETA, and its own folder at `~/Documents/ProSlide Beta/`. It installs beside the production app and never reads or changes its decks.
