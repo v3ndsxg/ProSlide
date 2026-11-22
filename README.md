@@ -7,14 +7,16 @@ A Mac app that gets things into ProPresenter quickly. It turns PDF and PowerPoin
 - [LibreOffice](https://www.libreoffice.org), only if you convert PowerPoint files
 - ProPresenter 7 or later
 
-To install:
+To install the beta (**ProSlide Beta**, with an orange icon). It installs beside the regular ProSlide app and keeps its own files:
 
 ```
-git clone https://github.com/v3ndsxg/ProSlide.git
-cd ProSlide
+git clone --branch beta --single-branch https://github.com/v3ndsxg/ProSlide.git ProSlide-beta
+cd ProSlide-beta
 ./Scripts/make-app-bundle.sh --install
-open /Applications/ProSlide.app
+open "/Applications/ProSlide Beta.app"
 ```
+
+To update it later, run `git pull` and `./Scripts/make-app-bundle.sh --install` again.
 
 The first time you open it, macOS may block it. Right-click the app and choose **Open**.
 
