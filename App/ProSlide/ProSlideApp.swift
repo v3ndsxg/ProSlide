@@ -16,8 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
-    /// An update built earlier, when the operator chose Later, installs once
-    /// the app has quit.
+    /// An update that is built but waiting for a conversion or download to
+    /// finish still installs if the operator quits ProSlide first.
     func applicationWillTerminate(_ notification: Notification) {
         AppUpdater.shared.launchInstaller(relaunch: false)
     }
