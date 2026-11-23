@@ -520,8 +520,13 @@ private final class ScriptedRunner: UpdateCommandRunner, @unchecked Sendable {
         return recorded
     }
 
+    /// Synchronous, since NSLock can't be taken directly in an async function.
+    private func record(_ call: [String]) {
+        lock.lock(); recorded.append(call); lock.unlock()
+    }
+
     func run(_ executable: URL, _ arguments: [String], idleTimeout: TimeInterval) async throws -> CommandResult {
-        lock.lock(); recorded.append([executable.lastPathComponent] + arguments); lock.unlock()
+        record([executable.lastPathComponent] + arguments)
         return try git.answer(tool: executable.lastPathComponent, arguments: arguments)
     }
 }
