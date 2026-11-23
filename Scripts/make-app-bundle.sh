@@ -67,6 +67,15 @@ case "$VARIANT" in
 esac
 APP="$ROOT/build/$APP_NAME.app"
 
+# Where this build came from, so the app's Update button knows which folder to
+# pull and rebuild, and which version is installed. Empty when the folder isn't
+# a git checkout (the button then explains that it can't update).
+xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+SOURCE_FOLDER="$(xml_escape "$ROOT")"
+SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+SOURCE_DATE="$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || true)"
+SOURCE_BRANCH="$(xml_escape "$(git -C "$ROOT" symbolic-ref --short -q HEAD 2>/dev/null || true)")"
+
 [ "$(uname -s)" = "Darwin" ] || die "ProSlide.app can only be built on macOS"
 command -v swift >/dev/null || die "swift not found; install Xcode or the Command Line Tools"
 [ -f "$ROOT/Package.swift" ] || die "$ROOT/Package.swift not found"
@@ -154,6 +163,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<string>$DATA_FOLDER</string>
 	<key>ProSlideIsBeta</key>
 	<$IS_BETA/>
+	<key>ProSlideSourceFolder</key>
+	<string>$SOURCE_FOLDER</string>
+	<key>ProSlideSourceCommit</key>
+	<string>$SOURCE_COMMIT</string>
+	<key>ProSlideSourceDate</key>
+	<string>$SOURCE_DATE</string>
+	<key>ProSlideSourceBranch</key>
+	<string>$SOURCE_BRANCH</string>
 </dict>
 </plist>
 PLIST

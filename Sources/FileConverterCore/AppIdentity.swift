@@ -22,7 +22,10 @@ public struct AppIdentity: Sendable {
     public static let current = AppIdentity(bundle: .main)
 
     init(bundle: Bundle) {
-        let info = bundle.infoDictionary ?? [:]
+        self.init(info: bundle.infoDictionary ?? [:])
+    }
+
+    init(info: [String: Any]) {
         displayName = info["CFBundleDisplayName"] as? String ?? "ProSlide"
         dataFolderName = info["ProSlideDataFolder"] as? String ?? AppIdentity.productionDataFolder
         isBeta = info["ProSlideIsBeta"] as? Bool ?? false

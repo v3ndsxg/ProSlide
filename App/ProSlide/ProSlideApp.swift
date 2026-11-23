@@ -6,6 +6,7 @@ import SwiftUI
 /// activation policy. Claiming it explicitly and bringing the app forward is
 /// cheap insurance for the cases where the window still fails to surface:
 /// a debugger attach to the raw binary, or another app holding focus at launch.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -13,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    /// An update built earlier, when the operator chose Later, installs once
+    /// the app has quit.
+    func applicationWillTerminate(_ notification: Notification) {
+        AppUpdater.shared.launchInstaller(relaunch: false)
     }
 }
 
@@ -22,10 +29,13 @@ struct ProSlideApp: App {
     @StateObject private var queue = ConversionQueue()
     @StateObject private var downloads = DownloadQueue()
     @StateObject private var lyrics = LyricsDraft()
+    @StateObject private var updater = AppUpdater.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .modifier(UpdateSupport())
+                .environmentObject(updater)
                 .environmentObject(queue)
                 .environmentObject(downloads)
                 .environmentObject(lyrics)
@@ -35,5 +45,10 @@ struct ProSlideApp: App {
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1280, height: 720)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates\u{2026}") { updater.showOrCheck() }
+            }
+        }
     }
 }
