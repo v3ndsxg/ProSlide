@@ -681,7 +681,9 @@ public final class AppUpdater: ObservableObject {
 /// app quits, since an app can't replace itself while it runs.
 ///
 /// The old app is moved aside, not deleted, until the new one is in place, so a
-/// failed copy puts it back and ProSlide is never left missing.
+/// failed swap puts it back and ProSlide is never left missing. The new app is
+/// moved rather than copied when it can be, so ProSlide reopens in a moment
+/// instead of after copying the whole app and its download tools.
 enum UpdateInstaller {
     static let script = #"""
     pid="$1"; staged="$2"; dest="$3"; relaunch="$4"; log="$5"; failed="$6"
@@ -699,7 +701,10 @@ enum UpdateInstaller {
     done
     new="$dest.new"; old="$dest.old"
     rm -rf "$new" "$old"
-    if /usr/bin/ditto "$staged" "$new" && mv "$dest" "$old" && mv "$new" "$dest"; then
+    # A rename is instant when the staged app is on the same disk as the
+    # installed one, as it normally is; otherwise it is copied.
+    if { mv "$staged" "$new" 2>/dev/null || { rm -rf "$new"; /usr/bin/ditto "$staged" "$new"; }; } &&
+        mv "$dest" "$old" && mv "$new" "$dest"; then
         rm -rf "$old" "$(dirname "$staged")"
         say "installed $dest"
     else
