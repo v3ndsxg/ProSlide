@@ -18,7 +18,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_DIR="/Applications"
 
-VERSION="0.1.0"
+# The version is the newest release tag (v1.2.0 -> 1.2.0) behind this checkout,
+# so a build of a release shows that release's number. 0.0.0 outside a git
+# checkout or before the first release.
+VERSION="$(git -C "$ROOT" describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+VERSION="${VERSION#v}"
+VERSION="${VERSION:-0.0.0}"
 BUILD_NUMBER="1"
 
 # Branch default. This is the one line that differs from beta ("beta" there).
@@ -68,13 +73,12 @@ esac
 APP="$ROOT/build/$APP_NAME.app"
 
 # Where this build came from, so the app's Update button knows which folder to
-# pull and rebuild, and which version is installed. Empty when the folder isn't
-# a git checkout (the button then explains that it can't update).
+# rebuild, and which commit is installed. Empty when the folder isn't a git
+# checkout (the button then explains that it can't update).
 xml_escape() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 SOURCE_FOLDER="$(xml_escape "$ROOT")"
 SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
 SOURCE_DATE="$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || true)"
-SOURCE_BRANCH="$(xml_escape "$(git -C "$ROOT" symbolic-ref --short -q HEAD 2>/dev/null || true)")"
 
 [ "$(uname -s)" = "Darwin" ] || die "ProSlide.app can only be built on macOS"
 command -v swift >/dev/null || die "swift not found; install Xcode or the Command Line Tools"
@@ -169,8 +173,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<string>$SOURCE_COMMIT</string>
 	<key>ProSlideSourceDate</key>
 	<string>$SOURCE_DATE</string>
-	<key>ProSlideSourceBranch</key>
-	<string>$SOURCE_BRANCH</string>
 </dict>
 </plist>
 PLIST

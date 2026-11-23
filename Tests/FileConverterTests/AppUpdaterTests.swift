@@ -1,48 +1,48 @@
 @testable import FileConverterCore
 import XCTest
 
-/// The Update button's logic, against a scripted git and build script: what a
-/// check finds, what an update refuses, and that only a finished build is ever
-/// staged. `UpdateInstallerTests` runs the real installer script.
+/// The Update button's logic, against a scripted curl, git and build script:
+/// what a check finds, what an update refuses, and that only a finished build
+/// of a published release is ever staged. `UpdateInstallerTests` runs the real
+/// installer script.
 @MainActor
 final class AppUpdaterTests: XCTestCase {
 
     // MARK: - Checking
 
-    func testUpToDateWhenTheInstalledCommitIsGitHubsTip() async throws {
+    func testUpToDateWhenTheInstalledBuildContainsTheRelease() async throws {
         let context = try Context()
-        context.git.tip = "aaa"
+        context.fake.releaseContained = true
         let updater = context.makeUpdater()
 
         await updater.check(userInitiated: true)
 
-        XCTAssertEqual(updater.state, .upToDate(installedDate: context.installedDate))
+        XCTAssertEqual(updater.state, .upToDate)
         XCTAssertTrue(updater.isShowingWindow)
+        XCTAssertEqual(updater.installedVersion, "1.0.0")
     }
 
-    func testFindsAnUpdateAndListsWhatChanged() async throws {
+    func testFindsANewerRelease() async throws {
         let context = try Context()
-        context.git.history = [
-            "ccc\u{1F}1764000000\u{1F}Merge pull request #30 from v3ndsxg/thing",
-            "bbb\u{1F}1763990000\u{1F}Bin: a clearer label",
-        ].joined(separator: "\n")
         let updater = context.makeUpdater()
 
         await updater.check(userInitiated: false)
 
-        guard case .available(let offer) = updater.state else { return XCTFail("expected an update, got \(updater.state)") }
-        XCTAssertEqual(offer.branch, "main")
-        XCTAssertFalse(offer.isOffMain)
-        XCTAssertEqual(offer.installedDate, context.installedDate)
-        XCTAssertEqual(offer.newDate, Date(timeIntervalSince1970: 1_764_000_000), "the new version's date is the tip's, merge or not")
-        XCTAssertEqual(offer.changes.map(\.title), ["Bin: a clearer label"], "GitHub's merge commits aren't listed")
+        guard case .available(let release) = updater.state else { return XCTFail("expected a release, got \(updater.state)") }
+        XCTAssertEqual(release.tag, "v1.1.0")
+        XCTAssertEqual(release.version, "1.1.0")
+        XCTAssertEqual(release.name, "Better bins")
+        XCTAssertEqual(release.notes, "What's Changed\n\u{2022} A clearer label")
+        XCTAssertEqual(release.date, ISO8601DateFormatter().date(from: "2026-12-03T18:00:00Z"))
         XCTAssertFalse(updater.isShowingWindow, "an automatic check never opens the window")
 
-        let log = try XCTUnwrap(context.runner.calls.first { $0.contains("log") })
-        XCTAssertTrue(log.contains("aaa..ccc"), "changes are counted from the installed version: \(log)")
+        let curl = try XCTUnwrap(context.runner.calls.first { $0.first == "curl" })
+        XCTAssertEqual(curl.last, UpdateSource.latestReleaseURL)
+        let compare = try XCTUnwrap(context.runner.calls.first { $0.contains("merge-base") })
+        XCTAssertEqual(Array(compare.suffix(2)), ["ccc", "aaa"], "is the release's commit inside the installed one?")
     }
 
-    func testFetchesFromTheBuiltInAddressNotTheFoldersSetting() async throws {
+    func testFetchesTheTagFromTheBuiltInAddressNotTheFoldersSetting() async throws {
         let context = try Context()
         let updater = context.makeUpdater()
 
@@ -50,46 +50,33 @@ final class AppUpdaterTests: XCTestCase {
 
         let fetch = try XCTUnwrap(context.runner.calls.first { $0.contains("fetch") })
         XCTAssertTrue(fetch.contains(UpdateSource.repositoryURL))
-        XCTAssertTrue(fetch.contains("+refs/heads/main:refs/remotes/origin/main"))
-    }
-
-    func testAFolderOnAnotherBranchSaysSo() async throws {
-        let context = try Context()
-        context.git.branch = "app-updater"
-        context.git.history = "ccc\u{1F}1764000000\u{1F}Test change"
-        let updater = context.makeUpdater()
-
-        await updater.check(userInitiated: true)
-
-        guard case .available(let offer) = updater.state else { return XCTFail("expected an update, got \(updater.state)") }
-        XCTAssertTrue(offer.isOffMain)
-        XCTAssertEqual(offer.branch, "app-updater")
+        XCTAssertTrue(fetch.contains("+refs/tags/v1.1.0:refs/tags/v1.1.0"))
     }
 
     func testRefusesAFolderThatDownloadsFromSomewhereElse() async throws {
         let context = try Context()
-        context.git.origin = "https://github.com/someone-else/ProSlide.git"
+        context.fake.origin = "https://github.com/someone-else/ProSlide.git"
         let updater = context.makeUpdater()
 
         await updater.check(userInitiated: true)
 
         XCTAssertEqual(updater.state, .problem(.wrongRemote("https://github.com/someone-else/ProSlide.git")))
-        XCTAssertFalse(context.runner.calls.contains { $0.contains("fetch") }, "nothing is fetched from an untrusted folder")
+        XCTAssertFalse(context.runner.calls.contains { $0.contains("fetch") }, "nothing is fetched into an untrusted folder")
     }
 
-    func testRefusesAFolderThatIsntOnABranch() async throws {
+    func testNoReleaseYet() async throws {
         let context = try Context()
-        context.git.branch = nil
+        context.fake.httpStatus = 404
         let updater = context.makeUpdater()
 
         await updater.check(userInitiated: true)
 
-        XCTAssertEqual(updater.state, .problem(.notOnBranch(context.folder)))
+        XCTAssertEqual(updater.state, .problem(.noRelease))
     }
 
     func testOfflineIsReportedOnlyWhenAsked() async throws {
         let context = try Context()
-        context.git.fetchFails = true
+        context.fake.curlFails = true
         let updater = context.makeUpdater()
 
         await updater.check(userInitiated: false)
@@ -101,17 +88,38 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertTrue(updater.isShowingWindow)
     }
 
-    func testAQuietFailureKeepsAnUpdateAlreadyFound() async throws {
+    func testRateLimitingSaysSo() async throws {
         let context = try Context()
-        context.git.history = "ccc\u{1F}1764000000\u{1F}Something new"
+        context.fake.httpStatus = 403
+        let updater = context.makeUpdater()
+
+        await updater.check(userInitiated: true)
+
+        guard case .problem(.failed(let message)) = updater.state else { return XCTFail("\(updater.state)") }
+        XCTAssertTrue(message.contains("limiting"), message)
+    }
+
+    func testATagThatIsntAVersionIsRefused() async throws {
+        let context = try Context()
+        context.fake.tag = "--upload-pack=evil"
+        let updater = context.makeUpdater()
+
+        await updater.check(userInitiated: true)
+
+        guard case .problem(.failed) = updater.state else { return XCTFail("\(updater.state)") }
+        XCTAssertFalse(context.runner.calls.contains { $0.contains("fetch") })
+    }
+
+    func testAQuietFailureKeepsAReleaseAlreadyFound() async throws {
+        let context = try Context()
         let updater = context.makeUpdater()
         await updater.check(userInitiated: false)
-        guard case .available = updater.state else { return XCTFail("expected an update") }
+        guard case .available = updater.state else { return XCTFail("expected a release") }
 
-        context.git.fetchFails = true
+        context.fake.curlFails = true
         await updater.check(userInitiated: false)
 
-        guard case .available = updater.state else { return XCTFail("the found update was forgotten: \(updater.state)") }
+        guard case .available = updater.state else { return XCTFail("the found release was forgotten: \(updater.state)") }
     }
 
     func testAMissingFolderIsReported() async throws {
@@ -133,24 +141,22 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertEqual(updater.state, .problem(.folderMissing(nil)))
     }
 
-    func testAnUnknownInstalledCommitCountsFromTheFoldersHead() async throws {
+    func testAnUnknownInstalledCommitComparesWithTheFoldersHead() async throws {
         let context = try Context()
-        context.git.knownCommits = []
-        context.git.head = "hhh"
-        context.git.history = "ccc\u{1F}1764000000\u{1F}Something new"
+        context.fake.knownCommits = []
+        context.fake.head = "hhh"
         let updater = context.makeUpdater()
 
         await updater.check(userInitiated: true)
 
-        let log = try XCTUnwrap(context.runner.calls.first { $0.contains("log") })
-        XCTAssertTrue(log.contains("hhh..ccc"), "\(log)")
+        let compare = try XCTUnwrap(context.runner.calls.first { $0.contains("merge-base") })
+        XCTAssertEqual(compare.last, "hhh")
     }
 
     // MARK: - Updating
 
-    func testAnUpdatePullsBuildsTheSameAppAndStagesIt() async throws {
+    func testAnUpdateChecksOutTheReleaseBuildsTheSameAppAndStagesIt() async throws {
         let context = try Context()
-        context.git.history = "ccc\u{1F}1764000000\u{1F}Something new"
         let updater = context.makeUpdater()
         await updater.check(userInitiated: false)
 
@@ -159,11 +165,11 @@ final class AppUpdaterTests: XCTestCase {
 
         XCTAssertTrue(updater.isShowingWindow, "a finished update says so")
         let calls = context.runner.calls
-        let merge = try XCTUnwrap(calls.firstIndex { $0.contains("merge") })
+        let checkout = try XCTUnwrap(calls.firstIndex { $0.contains("checkout") })
         let build = try XCTUnwrap(calls.firstIndex { $0.first == "bash" })
         let copy = try XCTUnwrap(calls.firstIndex { $0.first == "ditto" })
-        XCTAssertTrue(merge < build && build < copy)
-        XCTAssertTrue(calls[merge].contains("--ff-only"))
+        XCTAssertTrue(checkout < build && build < copy)
+        XCTAssertEqual(Array(calls[checkout].suffix(2)), ["--detach", "refs/tags/v1.1.0"])
         XCTAssertEqual(calls[build], ["bash", context.folder.appendingPathComponent("Scripts/make-app-bundle.sh").path, "--stable"])
         XCTAssertFalse(calls[build].contains("--install"), "the running app is never replaced by the build itself")
         XCTAssertEqual(calls[copy].last, context.staging.appendingPathComponent("ProSlide.app").path)
@@ -171,35 +177,20 @@ final class AppUpdaterTests: XCTestCase {
 
     func testRefusesToUpdateOverLocalEdits() async throws {
         let context = try Context()
-        context.git.history = "ccc\u{1F}1764000000\u{1F}Something new"
         let updater = context.makeUpdater()
         await updater.check(userInitiated: false)
 
-        context.git.status = " M README.md"
+        context.fake.status = " M README.md"
         updater.update()
         try await waitUntil { updater.state.isProblem }
 
         XCTAssertEqual(updater.state, .problem(.localChanges(context.folder)))
-        XCTAssertFalse(context.runner.calls.contains { $0.contains("merge") || $0.first == "bash" })
-    }
-
-    func testRefusesToUpdateOverUnpublishedCommits() async throws {
-        let context = try Context()
-        context.git.history = "ccc\u{1F}1764000000\u{1F}Something new"
-        let updater = context.makeUpdater()
-        await updater.check(userInitiated: false)
-
-        context.git.ahead = "2"
-        updater.update()
-        try await waitUntil { updater.state.isProblem }
-
-        XCTAssertEqual(updater.state, .problem(.localChanges(context.folder)))
+        XCTAssertFalse(context.runner.calls.contains { $0.contains("checkout") || $0.first == "bash" })
     }
 
     func testAFailedBuildStagesNothing() async throws {
         let context = try Context()
-        context.git.history = "ccc\u{1F}1764000000\u{1F}Something new"
-        context.git.buildFails = true
+        context.fake.buildFails = true
         let updater = context.makeUpdater()
         await updater.check(userInitiated: false)
 
@@ -214,7 +205,6 @@ final class AppUpdaterTests: XCTestCase {
 
     func testTheBetaRebuildsTheBeta() async throws {
         let context = try Context(appName: "ProSlide Beta", isBeta: true)
-        context.git.history = "ccc\u{1F}1764000000\u{1F}Something new"
         let updater = context.makeUpdater()
         await updater.check(userInitiated: false)
 
@@ -227,7 +217,7 @@ final class AppUpdaterTests: XCTestCase {
 
     // MARK: - A missing folder
 
-    func testDownloadAgainClonesMainIntoTheSameFolderAndBuilds() async throws {
+    func testDownloadAgainClonesIntoTheSameFolderAndBuildsTheRelease() async throws {
         let context = try Context()
         try FileManager.default.removeItem(at: context.folder)
         let updater = context.makeUpdater()
@@ -236,8 +226,11 @@ final class AppUpdaterTests: XCTestCase {
         updater.downloadAgain()
         try await waitUntil { updater.state == .ready }
 
-        let clone = try XCTUnwrap(context.runner.calls.first { $0.contains("clone") })
+        let calls = context.runner.calls
+        let clone = try XCTUnwrap(calls.first { $0.contains("clone") })
         XCTAssertEqual(Array(clone.suffix(4)), ["--branch", "main", UpdateSource.repositoryURL, context.folder.path])
+        let checkout = try XCTUnwrap(calls.first { $0.contains("checkout") })
+        XCTAssertEqual(checkout.last, "refs/tags/v1.1.0", "a fresh download builds the release, not main")
         XCTAssertEqual(updater.sourceFolder, context.folder)
     }
 
@@ -332,20 +325,54 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertFalse(UpdateSource.sameRepository(address, ""))
     }
 
+    func testOnlyVersionTagsAreReleases() {
+        for tag in ["v1", "v1.0", "v1.0.0", "v12.3.45", "v1.0.0.1"] {
+            XCTAssertTrue(UpdateSource.isReleaseTag(tag), tag)
+        }
+        for tag in ["1.0.0", "v1.0.0-beta", "main", "v1..0", "-v1.0.0", "v1.0.0\n", "--upload-pack=x", ""] {
+            XCTAssertFalse(UpdateSource.isReleaseTag(tag), tag)
+        }
+    }
+
+    func testReleaseNotesBecomePlainLines() {
+        let markdown = "## What's Changed\r\n* Bin: a clearer label by someone in #31\r\n- Lyrics: faster\r\n\r\n**Full Changelog**: v1.0.0...v1.1.0\r\n"
+        XCTAssertEqual(
+            UpdateSource.readableNotes(markdown),
+            "What's Changed\n\u{2022} Bin: a clearer label by someone in #31\n\u{2022} Lyrics: faster\n\n**Full Changelog**: v1.0.0...v1.1.0"
+        )
+    }
+
+    func testReadsGitHubsAnswer() throws {
+        let release = try UpdateSource.parseLatestRelease(FakeGit.releaseJSON(tag: "v2.0.0", name: "", body: "") + "\n200")
+        XCTAssertEqual(release.tag, "v2.0.0")
+        XCTAssertNil(release.name, "an empty title is no title")
+        XCTAssertEqual(release.notes, "")
+
+        XCTAssertThrowsError(try UpdateSource.parseLatestRelease("{\"message\":\"Not Found\"}\n404")) { error in
+            XCTAssertEqual(error as? UpdateProblem, .noRelease)
+        }
+        XCTAssertThrowsError(try UpdateSource.parseLatestRelease("<html>bad gateway</html>\n502")) { error in
+            XCTAssertEqual(error as? UpdateProblem, .offline)
+        }
+    }
+
     func testReadsTheBuildStamp() {
         let stamp = BuildStamp(info: [
             "ProSlideSourceFolder": "/Users/me/ProSlide",
             "ProSlideSourceCommit": "abc123",
             "ProSlideSourceDate": "1763800000",
-            "ProSlideSourceBranch": "main",
+            "CFBundleShortVersionString": "1.2.0",
         ])
         XCTAssertEqual(stamp.sourceFolder?.path, "/Users/me/ProSlide")
         XCTAssertEqual(stamp.commit, "abc123")
         XCTAssertEqual(stamp.commitDate, Date(timeIntervalSince1970: 1_763_800_000))
-        XCTAssertEqual(stamp.branch, "main")
+        XCTAssertEqual(stamp.version, "1.2.0")
 
-        XCTAssertEqual(BuildStamp(info: ["ProSlideSourceFolder": "", "ProSlideSourceCommit": ""]), BuildStamp(),
-                       "a build outside a git checkout stamps empty strings")
+        XCTAssertEqual(
+            BuildStamp(info: ["ProSlideSourceFolder": "", "ProSlideSourceCommit": "", "CFBundleShortVersionString": "0.0.0"]),
+            BuildStamp(),
+            "a build outside a git checkout, or before the first release, stamps nothing useful"
+        )
     }
 
     // MARK: - Helpers
@@ -374,7 +401,7 @@ private extension UpdateState {
     }
 }
 
-/// A temporary ProSlide folder, staging folder and defaults, plus a scripted git.
+/// A temporary ProSlide folder, staging folder and defaults, plus scripted tools.
 @MainActor
 private final class Context {
     let root: URL
@@ -382,9 +409,8 @@ private final class Context {
     let staging: URL
     let defaults: UserDefaults
     let identity: AppIdentity
-    let git: FakeGit
+    let fake: FakeGit
     let runner: ScriptedRunner
-    let installedDate = Date(timeIntervalSince1970: 1_763_800_000)
 
     init(appName: String = "ProSlide", isBeta: Bool = false) throws {
         let root = FileManager.default.temporaryDirectory
@@ -401,7 +427,7 @@ private final class Context {
             "ProSlideIsBeta": isBeta,
         ])
         let fake = FakeGit()
-        git = fake
+        self.fake = fake
         runner = ScriptedRunner(fake)
     }
 
@@ -411,7 +437,12 @@ private final class Context {
 
     func makeUpdater(stamp: BuildStamp? = nil) -> AppUpdater {
         AppUpdater(
-            stamp: stamp ?? BuildStamp(sourceFolder: folder, commit: "aaa", commitDate: installedDate, branch: "main"),
+            stamp: stamp ?? BuildStamp(
+                sourceFolder: folder,
+                commit: "aaa",
+                commitDate: Date(timeIntervalSince1970: 1_763_800_000),
+                version: "1.0.0"
+            ),
             identity: identity,
             runner: runner,
             log: DownloadLog(fileURL: root.appendingPathComponent("update.log")),
@@ -431,34 +462,43 @@ private final class Context {
     }
 }
 
-/// Answers git, the build script and ditto the way a ProSlide folder would.
+/// Answers curl, git, the build script and ditto the way GitHub and a ProSlide
+/// folder would. The installed build is "aaa"; the release "v1.1.0" is "ccc".
 private final class FakeGit: @unchecked Sendable {
     private let lock = NSLock()
-    private var _origin = UpdateSource.repositoryURL
-    private var _branch: String? = "main"
-    private var _head = "aaa"
-    private var _tip = "ccc"
-    private var _history = ""
-    private var _status = ""
-    private var _ahead = "0"
-    private var _fetchFails = false
-    private var _buildFails = false
-    private var _knownCommits: Set<String> = ["aaa"]
+    private var values: [String: Any] = [:]
 
-    var origin: String { get { locked { _origin } } set { locked { _origin = newValue } } }
-    var branch: String? { get { locked { _branch } } set { locked { _branch = newValue } } }
-    var head: String { get { locked { _head } } set { locked { _head = newValue } } }
-    var tip: String { get { locked { _tip } } set { locked { _tip = newValue } } }
-    var history: String { get { locked { _history } } set { locked { _history = newValue } } }
-    var status: String { get { locked { _status } } set { locked { _status = newValue } } }
-    var ahead: String { get { locked { _ahead } } set { locked { _ahead = newValue } } }
-    var fetchFails: Bool { get { locked { _fetchFails } } set { locked { _fetchFails = newValue } } }
-    var buildFails: Bool { get { locked { _buildFails } } set { locked { _buildFails = newValue } } }
-    var knownCommits: Set<String> { get { locked { _knownCommits } } set { locked { _knownCommits = newValue } } }
-
-    private func locked<T>(_ body: () -> T) -> T {
+    private func value<T>(_ key: String, _ fallback: T) -> T {
         lock.lock(); defer { lock.unlock() }
-        return body()
+        return values[key] as? T ?? fallback
+    }
+
+    private func store(_ key: String, _ value: Any) {
+        lock.lock(); defer { lock.unlock() }
+        values[key] = value
+    }
+
+    var origin: String { get { value("origin", UpdateSource.repositoryURL) } set { store("origin", newValue) } }
+    var head: String { get { value("head", "aaa") } set { store("head", newValue) } }
+    var tag: String { get { value("tag", "v1.1.0") } set { store("tag", newValue) } }
+    var httpStatus: Int { get { value("httpStatus", 200) } set { store("httpStatus", newValue) } }
+    var curlFails: Bool { get { value("curlFails", false) } set { store("curlFails", newValue) } }
+    var releaseContained: Bool { get { value("releaseContained", false) } set { store("releaseContained", newValue) } }
+    var status: String { get { value("status", "") } set { store("status", newValue) } }
+    var buildFails: Bool { get { value("buildFails", false) } set { store("buildFails", newValue) } }
+    var knownCommits: Set<String> { get { value("knownCommits", Set(["aaa"])) } set { store("knownCommits", newValue) } }
+
+    static func releaseJSON(tag: String, name: String, body: String) -> String {
+        let payload: [String: Any] = [
+            "tag_name": tag,
+            "name": name,
+            "body": body,
+            "published_at": "2026-12-03T18:00:00Z",
+            "draft": false,
+            "prerelease": false,
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])
+        return String(decoding: data, as: UTF8.self)
     }
 
     static func makeProSlideFolder(at folder: URL) throws {
@@ -470,22 +510,27 @@ private final class FakeGit: @unchecked Sendable {
 
     func answer(tool: String, arguments: [String]) throws -> CommandResult {
         switch tool {
+        case "curl":
+            if curlFails { return CommandResult(status: 6, tail: ["curl: (6) Could not resolve host: api.github.com"]) }
+            let body = httpStatus == 200
+                ? FakeGit.releaseJSON(tag: tag, name: "Better bins", body: "## What's Changed\r\n* A clearer label\r\n")
+                : "{\"message\":\"Not Found\"}"
+            return CommandResult(status: 0, output: body + "\n\(httpStatus)")
         case "git":
             var args = arguments
             if args.first == "-C" { args.removeFirst(2) }
             switch args.first {
             case "remote": return CommandResult(status: 0, output: origin)
-            case "symbolic-ref": return branch.map { CommandResult(status: 0, output: $0) } ?? CommandResult(status: 1)
-            case "fetch":
-                return fetchFails ? CommandResult(status: 128, tail: ["fatal: unable to access the repository"]) : CommandResult(status: 0)
-            case "rev-parse": return CommandResult(status: 0, output: args.last == "HEAD" ? head : tip)
+            case "fetch": return CommandResult(status: 0)
+            case "rev-parse":
+                let name = args.last ?? ""
+                return CommandResult(status: 0, output: name.hasPrefix("refs/tags/") ? "ccc" : head)
             case "cat-file":
                 let commit = (args.last ?? "").replacingOccurrences(of: "^{commit}", with: "")
                 return CommandResult(status: knownCommits.contains(commit) ? 0 : 1)
-            case "log": return CommandResult(status: 0, output: history)
+            case "merge-base": return CommandResult(status: releaseContained ? 0 : 1)
             case "status": return CommandResult(status: 0, output: status)
-            case "rev-list": return CommandResult(status: 0, output: ahead)
-            case "merge": return CommandResult(status: 0)
+            case "checkout": return CommandResult(status: 0)
             case "clone":
                 try FakeGit.makeProSlideFolder(at: URL(fileURLWithPath: args.last ?? "", isDirectory: true))
                 return CommandResult(status: 0)
@@ -508,11 +553,11 @@ private final class FakeGit: @unchecked Sendable {
 }
 
 private final class ScriptedRunner: UpdateCommandRunner, @unchecked Sendable {
-    private let git: FakeGit
+    private let fake: FakeGit
     private let lock = NSLock()
     private var recorded: [[String]] = []
 
-    init(_ git: FakeGit) { self.git = git }
+    init(_ fake: FakeGit) { self.fake = fake }
 
     /// Each call as the tool's name followed by its arguments.
     var calls: [[String]] {
@@ -527,7 +572,7 @@ private final class ScriptedRunner: UpdateCommandRunner, @unchecked Sendable {
 
     func run(_ executable: URL, _ arguments: [String], idleTimeout: TimeInterval) async throws -> CommandResult {
         record([executable.lastPathComponent] + arguments)
-        return try git.answer(tool: executable.lastPathComponent, arguments: arguments)
+        return try fake.answer(tool: executable.lastPathComponent, arguments: arguments)
     }
 }
 
