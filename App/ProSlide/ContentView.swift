@@ -289,9 +289,12 @@ struct ContentView: View {
                     .buttonStyle(.borderless)
                     .disabled(queue.isConverting || downloads.isDownloading)
             }
-            // The mode only changes what a deck hands over; a download is always
-            // the file itself.
-            if !queue.groups.isEmpty {
+            // The mode only changes what a deck hands over: a download is always
+            // the file itself, and a song is always a presentation. So the switch
+            // belongs to the Converter tab, where it shows even before the first
+            // deck so the mode can be chosen up front. A deck dragged from another
+            // tab still hands over the mode chosen here.
+            if tab == .converter {
                 DragModeTabs(selection: $queue.dragMode)
                 Text(binHint).font(.caption).foregroundStyle(.secondary)
             }
