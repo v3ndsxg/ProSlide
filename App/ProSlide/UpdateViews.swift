@@ -35,9 +35,19 @@ struct UpdateSupport: ViewModifier {
             .task { updater.startAutomaticChecks() }
     }
 
+    /// Starts the installer, then quits so it can swap the new app in and
+    /// reopen it. The update window is closed first and the quit waits a moment,
+    /// since AppKit can decline to quit while a sheet is still attached. If
+    /// ProSlide is somehow still running a few seconds later, it exits anyway:
+    /// the installer is already waiting for it.
     private func restartNow() {
-        if updater.launchInstaller(relaunch: true) {
+        guard updater.launchInstaller(relaunch: true) else { return }
+        updater.isShowingWindow = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             NSApp.terminate(nil)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+            exit(0)
         }
     }
 }
@@ -66,7 +76,7 @@ struct UpdateButton: View {
             .help("ProSlide is updating. You can keep working.")
         case .ready:
             Button { updater.showOrCheck() } label: {
-                Label("Restart to Update", systemImage: "arrow.clockwise.circle.fill")
+                Label("Restart ProSlide to Update", systemImage: "arrow.clockwise.circle.fill")
                     .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
@@ -96,7 +106,7 @@ struct UpdateWindow: View {
         .padding(24)
         .frame(width: 460, alignment: .leading)
         .confirmationDialog(
-            "\(busyReason ?? "ProSlide is busy.") Restart anyway?",
+            "\(busyReason ?? "ProSlide is busy.") Restart ProSlide anyway?",
             isPresented: $confirmingRestart,
             titleVisibility: .visible
         ) {
@@ -104,7 +114,7 @@ struct UpdateWindow: View {
                 updater.restartWhenIdle = true
                 updater.dismiss()
             }
-            Button("Restart Anyway", role: .destructive) { restartNow() }
+            Button("Restart ProSlide Anyway", role: .destructive) { restartNow() }
         } message: {
             Text("Wait restarts ProSlide on its own as soon as it finishes.")
         }
@@ -152,12 +162,12 @@ struct UpdateWindow: View {
             if updater.restartWhenIdle {
                 Text("ProSlide will restart as soon as it finishes what it\u{2019}s doing.").foregroundStyle(.secondary)
             } else {
-                Text("Restart ProSlide to start using the new version. If you choose Later, it installs the next time you quit ProSlide.")
+                Text("Restart ProSlide to start using the new version. It closes and opens again on its own in a few seconds. If you choose Later, the new version installs the next time you quit ProSlide.")
                     .foregroundStyle(.secondary)
             }
             buttons {
                 Button("Later") { updater.dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Restart Now") {
+                Button("Restart ProSlide") {
                     if busyReason == nil { restartNow() } else { confirmingRestart = true }
                 }
                 .keyboardShortcut(.defaultAction)
