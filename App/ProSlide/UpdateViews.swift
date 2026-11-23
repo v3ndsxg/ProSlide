@@ -120,24 +120,17 @@ struct UpdateWindow: View {
             }
             buttons { Button("Close") { updater.dismiss() }.keyboardShortcut(.cancelAction) }
 
-        case .upToDate(let installed):
+        case .upToDate:
             Text("ProSlide is up to date").font(.title2.weight(.semibold))
-            if let installed {
-                Text("You have the version from \(day(installed)).").foregroundStyle(.secondary)
+            if let installed = installedDescription {
+                Text("You have \(installed).").foregroundStyle(.secondary)
             }
             buttons { Button("OK") { updater.dismiss() }.keyboardShortcut(.defaultAction) }
 
-        case .available(let offer):
-            Text("A new version of ProSlide is available").font(.title2.weight(.semibold))
-            Text(versions(offer)).foregroundStyle(.secondary)
-            if offer.isOffMain {
-                Label(
-                    "This ProSlide folder follows the \u{201C}\(offer.branch)\u{201D} branch, not main, so the update comes from that branch.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .foregroundStyle(.orange)
-            }
-            changeList(offer.changes)
+        case .available(let release):
+            Text("ProSlide \(release.version) is available").font(.title2.weight(.semibold))
+            Text(versions(release)).foregroundStyle(.secondary)
+            releaseNotes(release)
             Text("You can keep using ProSlide while it updates.").font(.callout).foregroundStyle(.secondary)
             buttons {
                 Button("Cancel") { updater.dismiss() }.keyboardShortcut(.cancelAction)
@@ -183,6 +176,12 @@ struct UpdateWindow: View {
             Text("Check your internet connection and try again.").foregroundStyle(.secondary)
             buttons { Button("OK") { updater.dismiss() }.keyboardShortcut(.defaultAction) }
 
+        case .noRelease:
+            heading("No release yet")
+            Text("ProSlide updates come from releases published on GitHub, and none has been published yet.")
+                .foregroundStyle(.secondary)
+            buttons { Button("OK") { updater.dismiss() }.keyboardShortcut(.defaultAction) }
+
         case .folderMissing(let folder):
             heading("The ProSlide folder is missing")
             if let folder {
@@ -217,18 +216,12 @@ struct UpdateWindow: View {
 
         case .localChanges(let folder):
             heading("The ProSlide folder has changes")
-            Text("Someone changed files in \(folder.path) that aren\u{2019}t on GitHub. ProSlide won\u{2019}t update over them. Remove the changes, or publish them to GitHub, and try again.")
+            Text("Someone changed files in \(folder.path). ProSlide won\u{2019}t update over them. Remove the changes, or publish them to GitHub, and try again.")
                 .foregroundStyle(.secondary)
             buttons {
                 Button("Show Folder") { NSWorkspace.shared.activateFileViewerSelecting([folder]) }
                 Button("OK") { updater.dismiss() }.keyboardShortcut(.defaultAction)
             }
-
-        case .notOnBranch(let folder):
-            heading("ProSlide can\u{2019}t update from this folder")
-            Text("\(folder.path) isn\u{2019}t following a branch, so there\u{2019}s nothing to update from. Switch it back to main and try again.")
-                .foregroundStyle(.secondary)
-            buttons { Button("OK") { updater.dismiss() }.keyboardShortcut(.defaultAction) }
 
         case .failed(let message):
             heading("The update didn\u{2019}t finish")
@@ -255,31 +248,33 @@ struct UpdateWindow: View {
         .padding(.top, 6)
     }
 
-    private func changeList(_ changes: [UpdateChange]) -> some View {
+    private func releaseNotes(_ release: UpdateRelease) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("What\u{2019}s new").font(.headline)
+            Text(release.name ?? "What\u{2019}s new").font(.headline)
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(changes) { change in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text("\u{2022}")
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(change.title)
-                                Text(day(change.date)).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
+                Text(release.notes.isEmpty ? "No notes for this release." : release.notes)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 180)
+            .frame(maxHeight: 200)
         }
     }
 
-    private func versions(_ offer: UpdateOffer) -> String {
-        let new = "The new version is from \(day(offer.newDate))."
-        guard let installed = offer.installedDate else { return new }
-        return "You have the version from \(day(installed)). \(new)"
+    /// "version 1.0.0, from November 22, 2026", or as much of it as is known.
+    private var installedDescription: String? {
+        switch (updater.installedVersion, updater.installedDate) {
+        case let (version?, date?): return "version \(version), from \(day(date))"
+        case let (version?, nil): return "version \(version)"
+        case let (nil, date?): return "the version from \(day(date))"
+        case (nil, nil): return nil
+        }
+    }
+
+    private func versions(_ release: UpdateRelease) -> String {
+        let new = release.date.map { "Version \(release.version) was released on \(day($0))." }
+            ?? "Version \(release.version) is the newest release."
+        guard let installed = installedDescription else { return new }
+        return "You have \(installed). \(new)"
     }
 
     private func day(_ date: Date) -> String {

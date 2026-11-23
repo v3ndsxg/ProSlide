@@ -3,7 +3,8 @@ import Foundation
 // MARK: - What the build stamped
 
 /// Where the running app was built from, as `Scripts/make-app-bundle.sh` stamped
-/// it into Info.plist: the folder to pull and rebuild, and the version installed.
+/// it into Info.plist: the folder to rebuild, the commit installed, and the
+/// release version it was built from.
 ///
 /// Every field is optional. A build from a folder that isn't a git checkout, or
 /// an app from before the Update button, has none of them.
@@ -11,15 +12,16 @@ public struct BuildStamp: Equatable, Sendable {
     public var sourceFolder: URL?
     public var commit: String?
     public var commitDate: Date?
-    public var branch: String?
+    /// The newest release behind the build, such as "1.2.0". Nil before the first release.
+    public var version: String?
 
     public static let current = BuildStamp(bundle: .main)
 
-    public init(sourceFolder: URL? = nil, commit: String? = nil, commitDate: Date? = nil, branch: String? = nil) {
+    public init(sourceFolder: URL? = nil, commit: String? = nil, commitDate: Date? = nil, version: String? = nil) {
         self.sourceFolder = sourceFolder
         self.commit = commit
         self.commitDate = commitDate
-        self.branch = branch
+        self.version = version
     }
 
     init(bundle: Bundle) {
@@ -34,17 +36,19 @@ public struct BuildStamp: Equatable, Sendable {
         sourceFolder = text("ProSlideSourceFolder").map { URL(fileURLWithPath: $0, isDirectory: true) }
         commit = text("ProSlideSourceCommit")
         commitDate = text("ProSlideSourceDate").flatMap { TimeInterval($0) }.map { Date(timeIntervalSince1970: $0) }
-        branch = text("ProSlideSourceBranch")
+        version = text("CFBundleShortVersionString").flatMap { $0 == "0.0.0" ? nil : $0 }
     }
 }
 
 // MARK: - Fixed facts
 
-/// The constants the updater trusts. The repository address is built in rather
-/// than read from the folder, so changing a setting in the folder can't redirect
+/// The constants the updater trusts. The addresses are built in rather than
+/// read from the folder, so changing a setting in the folder can't redirect
 /// updates somewhere else.
 public enum UpdateSource {
     public static let repositoryURL = "https://github.com/v3ndsxg/ProSlide.git"
+    /// GitHub's newest published release: never a draft or a pre-release.
+    public static let latestReleaseURL = "https://api.github.com/repos/v3ndsxg/ProSlide/releases/latest"
     public static let mainBranch = "main"
     /// The automatic check runs at launch and then this often while the app stays open.
     public static let checkInterval: TimeInterval = 24 * 60 * 60
@@ -80,42 +84,77 @@ public enum UpdateSource {
         return text
     }
 
-    /// Reads `git log --format=%H%x1f%ct%x1f%s`, newest first.
-    static func parseChanges(_ output: String) -> [UpdateChange] {
-        output.split(separator: "\n").compactMap { line in
-            let fields = line.split(separator: "\u{1F}", maxSplits: 2, omittingEmptySubsequences: false)
-            guard fields.count == 3, let seconds = TimeInterval(fields[1]) else { return nil }
-            return UpdateChange(commit: String(fields[0]), date: Date(timeIntervalSince1970: seconds), title: String(fields[2]))
-        }
+    /// Release tags look like `v1.2.0`. Anything else is refused, so a tag name
+    /// can never be read as a git option or an odd ref.
+    public static func isReleaseTag(_ tag: String) -> Bool {
+        tag.range(of: #"^v[0-9]+(\.[0-9]+){0,3}\z"#, options: .regularExpression) != nil
     }
 
-    /// The changes worth listing: GitHub's "Merge pull request …" commits say
-    /// nothing the commits they merge don't. Kept if they are all there is.
-    static func listedChanges(_ changes: [UpdateChange]) -> [UpdateChange] {
-        let real = changes.filter { !$0.title.hasPrefix("Merge pull request ") && !$0.title.hasPrefix("Merge branch ") }
-        return real.isEmpty ? changes : real
+    /// Reads curl's output: GitHub's JSON, then the HTTP status on the last line.
+    static func parseLatestRelease(_ output: String) throws -> UpdateRelease {
+        var lines = output.components(separatedBy: "\n")
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeLast() }
+        let status = Int(lines.popLast()?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
+        switch status {
+        case 200: break
+        case 404: throw UpdateProblem.noRelease
+        case 403, 429: throw UpdateProblem.failed("GitHub is limiting requests right now. Try again in an hour.")
+        default: throw UpdateProblem.offline
+        }
+        struct Payload: Decodable {
+            let tag_name: String
+            let name: String?
+            let body: String?
+            let published_at: String?
+        }
+        guard let payload = try? JSONDecoder().decode(Payload.self, from: Data(lines.joined(separator: "\n").utf8)) else {
+            throw UpdateProblem.failed("GitHub\u{2019}s answer about the latest release couldn\u{2019}t be read.")
+        }
+        guard isReleaseTag(payload.tag_name) else {
+            throw UpdateProblem.failed("The latest release\u{2019}s tag, \u{201C}\(payload.tag_name)\u{201D}, doesn\u{2019}t look like a version (v1.2.0), so ProSlide won\u{2019}t install it.")
+        }
+        let name = payload.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return UpdateRelease(
+            tag: payload.tag_name,
+            name: name.isEmpty ? nil : name,
+            notes: readableNotes(payload.body ?? ""),
+            date: payload.published_at.flatMap { ISO8601DateFormatter().date(from: $0) }
+        )
+    }
+
+    /// Release notes as plain lines: Markdown headings lose their `#`s and list
+    /// items get a bullet, since the window shows text, not rendered Markdown.
+    static func readableNotes(_ markdown: String) -> String {
+        markdown
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: "\n")
+            .map { line -> String in
+                var text = line
+                if let heading = text.range(of: #"^\s*#{1,6}\s+"#, options: .regularExpression) {
+                    text.removeSubrange(heading)
+                } else if let item = text.range(of: #"^\s*[*-]\s+"#, options: .regularExpression) {
+                    text.replaceSubrange(item, with: "\u{2022} ")
+                }
+                return text
+            }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
 // MARK: - State
 
-public struct UpdateChange: Equatable, Sendable, Identifiable {
-    public let commit: String
-    public let date: Date
-    public let title: String
-    public var id: String { commit }
-}
+/// A published release on GitHub.
+public struct UpdateRelease: Equatable, Sendable {
+    /// Such as "v1.2.0".
+    public let tag: String
+    /// The release's title, when it has one besides the tag.
+    public let name: String?
+    public let notes: String
+    public let date: Date?
 
-/// An update that is waiting on GitHub.
-public struct UpdateOffer: Equatable, Sendable {
-    public let branch: String
-    public let installedDate: Date?
-    public let newDate: Date
-    /// Newest first.
-    public let changes: [UpdateChange]
-
-    /// The folder follows a branch other than main, as when testing the updater.
-    public var isOffMain: Bool { branch != UpdateSource.mainBranch }
+    /// "1.2.0"
+    public var version: String { tag.hasPrefix("v") ? String(tag.dropFirst()) : tag }
 }
 
 public enum UpdateStep: Equatable, Sendable {
@@ -135,16 +174,16 @@ public enum UpdateStep: Equatable, Sendable {
 public enum UpdateProblem: Error, Equatable, Sendable {
     /// GitHub couldn't be reached.
     case offline
+    /// Nothing has been released yet.
+    case noRelease
     /// The folder the app was built from is gone. Nil when the app never knew it.
     case folderMissing(URL?)
     /// The folder exists but isn't a ProSlide download.
     case notProSlideFolder(URL)
     /// The folder downloads from somewhere other than the built-in address.
     case wrongRemote(String)
-    /// The folder has edits or commits that aren't on GitHub.
+    /// The folder has edits that aren't on GitHub.
     case localChanges(URL)
-    /// The folder isn't on a branch, so there is nothing to follow.
-    case notOnBranch(URL)
     /// A step failed; the message says which. The installed app is untouched.
     case failed(String)
 }
@@ -153,8 +192,8 @@ public enum UpdateState: Equatable, Sendable {
     /// Not checked yet, or the last automatic check failed quietly.
     case unknown
     case checking
-    case upToDate(installedDate: Date?)
-    case available(UpdateOffer)
+    case upToDate
+    case available(UpdateRelease)
     case updating(UpdateStep)
     /// Built and waiting: installs on restart, or when the app next quits.
     case ready
@@ -176,7 +215,7 @@ public struct CommandResult: Sendable {
     }
 }
 
-/// Runs git, the build script and ditto. Tests replace it with a script.
+/// Runs curl, git, the build script and ditto. Tests replace it with a script.
 public protocol UpdateCommandRunner: Sendable {
     func run(_ executable: URL, _ arguments: [String], idleTimeout: TimeInterval) async throws -> CommandResult
 }
@@ -200,12 +239,14 @@ struct LoggedCommandRunner: UpdateCommandRunner {
 
 // MARK: - The updater
 
-/// Keeps ProSlide up to date from the folder it was built from: checks GitHub,
-/// pulls, rebuilds with the packaging script, and swaps the new app in once this
-/// one has quit.
+/// Keeps ProSlide on the newest GitHub release: checks for one, checks the
+/// folder it was built from out at the release's tag, rebuilds with the
+/// packaging script, and swaps the new app in once this one has quit.
 ///
-/// Nothing is installed without the operator pressing Update. A failed step
-/// leaves the installed app as it was; only a finished build is ever swapped in.
+/// Only published releases count, never drafts, pre-releases or work merged
+/// into main. Nothing is installed without the operator pressing Update. A
+/// failed step leaves the installed app as it was; only a finished build is
+/// ever swapped in.
 @MainActor
 public final class AppUpdater: ObservableObject {
     @Published public private(set) var state: UpdateState = .unknown
@@ -217,6 +258,7 @@ public final class AppUpdater: ObservableObject {
     public let log: DownloadLog
     let stamp: BuildStamp
     let repositoryURL: String
+    let latestReleaseURL: String
     let runner: UpdateCommandRunner
     let defaults: UserDefaults
     let stagingFolder: URL
@@ -226,6 +268,7 @@ public final class AppUpdater: ObservableObject {
     /// Rebuilds the same app that is running.
     let variantFlag: String
 
+    let curlTool = URL(fileURLWithPath: "/usr/bin/curl")
     let gitTool = URL(fileURLWithPath: "/usr/bin/git")
     let bashTool = URL(fileURLWithPath: "/bin/bash")
     let dittoTool = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -238,6 +281,7 @@ public final class AppUpdater: ObservableObject {
         stamp: BuildStamp = .current,
         identity: AppIdentity = .current,
         repositoryURL: String = UpdateSource.repositoryURL,
+        latestReleaseURL: String = UpdateSource.latestReleaseURL,
         runner: UpdateCommandRunner? = nil,
         log: DownloadLog = DownloadLog(fileURL: UpdateSource.defaultLogURL),
         defaults: UserDefaults = .standard,
@@ -246,6 +290,7 @@ public final class AppUpdater: ObservableObject {
     ) {
         self.stamp = stamp
         self.repositoryURL = repositoryURL
+        self.latestReleaseURL = latestReleaseURL
         self.runner = runner ?? LoggedCommandRunner(log: log)
         self.log = log
         self.defaults = defaults
@@ -256,11 +301,16 @@ public final class AppUpdater: ObservableObject {
         restoreStagedUpdate()
     }
 
+    /// The installed release, such as "1.2.0". Nil before the first release.
+    public var installedVersion: String? { stamp.version }
+    /// When the installed version's last change was made.
+    public var installedDate: Date? { stamp.commitDate }
+
     var stagedApp: URL { stagingFolder.appendingPathComponent("\(appName).app", isDirectory: true) }
     /// Written by the installer when it couldn't swap the app in.
     var failureMarker: URL { stagingFolder.appendingPathComponent("install-failed.txt") }
 
-    /// The folder updates come from: the one the operator chose after the
+    /// The folder updates are built in: the one the operator chose after the
     /// stamped one went missing, or the stamped one.
     public var sourceFolder: URL? {
         if let chosen = defaults.string(forKey: UpdateSource.chosenFolderKey),
@@ -273,7 +323,7 @@ public final class AppUpdater: ObservableObject {
     // MARK: Checking
 
     /// Checks now, then once a day while the app is open. Quiet: nothing shows
-    /// unless an update is found, and nothing is installed.
+    /// unless a release is found, and nothing is installed.
     public func startAutomaticChecks() {
         guard timer == nil else { return }
         Task { await check(userInitiated: false) }
@@ -292,8 +342,8 @@ public final class AppUpdater: ObservableObject {
         }
     }
 
-    /// Asks GitHub whether there's anything new. A check the operator started
-    /// opens the window and reports problems; an automatic one fails silently.
+    /// Asks GitHub for its newest release. A check the operator started opens
+    /// the window and reports problems; an automatic one fails silently.
     public func check(userInitiated: Bool) async {
         switch state {
         case .checking, .updating, .ready:
@@ -322,40 +372,35 @@ public final class AppUpdater: ObservableObject {
     }
 
     private func findUpdate() async throws -> UpdateState {
-        let (folder, branch) = try await preparedFolder()
-        try await fetch(folder, branch: branch, failure: .offline)
-        let tip = try await revParse(folder, "refs/remotes/origin/\(branch)")
-        let base = try await installedBase(folder)
-        guard base != tip else { return .upToDate(installedDate: stamp.commitDate) }
-        let history = try await git(folder, ["log", "--format=%H%x1f%ct%x1f%s", "\(base)..\(tip)"])
-        guard history.status == 0 else { throw UpdateProblem.failed("Couldn\u{2019}t read what changed in the ProSlide folder.") }
-        let changes = UpdateSource.parseChanges(history.output)
-        guard let newest = changes.first else { return .upToDate(installedDate: stamp.commitDate) }
-        return .available(UpdateOffer(
-            branch: branch,
-            installedDate: stamp.commitDate,
-            newDate: newest.date,
-            changes: UpdateSource.listedChanges(changes)
-        ))
+        let folder = try await preparedFolder()
+        let release = try await latestRelease()
+        let releaseCommit = try await fetchRelease(release, into: folder, failure: .offline)
+        let installed = try await installedCommit(folder)
+        // Up to date when the installed build already contains the release,
+        // which also covers a build made from newer work by hand.
+        let contained = try await git(folder, ["merge-base", "--is-ancestor", releaseCommit, installed])
+        switch contained.status {
+        case 0: return .upToDate
+        case 1: return .available(release)
+        default: throw UpdateProblem.failed("Couldn\u{2019}t compare the installed version with the release.")
+        }
     }
 
     // MARK: Updating
 
-    /// Pulls and rebuilds in the background; the app keeps working meanwhile.
+    /// Checks the folder out at the release and rebuilds in the background; the
+    /// app keeps working meanwhile.
     public func update() {
-        guard case .available = state else { return }
+        guard case .available(let release) = state else { return }
         state = .updating(.downloading)
         Task {
             do {
-                let (folder, branch) = try await preparedFolder()
-                try await fetch(folder, branch: branch, failure: .failed(
+                let folder = try await preparedFolder()
+                try await refuseLocalChanges(folder)
+                _ = try await fetchRelease(release, into: folder, failure: .failed(
                     "Couldn\u{2019}t download the update. Check your internet connection and try again."
                 ))
-                try await refuseLocalChanges(folder, branch: branch)
-                let merge = try await git(folder, ["merge", "--ff-only", "--quiet", "refs/remotes/origin/\(branch)"])
-                guard merge.status == 0 else {
-                    throw UpdateProblem.failed("Couldn\u{2019}t apply the update to the ProSlide folder.")
-                }
+                try await checkOut(release, in: folder)
                 try await buildAndStage(folder)
             } catch {
                 fail(error)
@@ -363,7 +408,8 @@ public final class AppUpdater: ObservableObject {
         }
     }
 
-    /// Downloads ProSlide again into the folder it was built from, then builds it.
+    /// Downloads ProSlide again into the folder it was built from, then builds
+    /// the newest release.
     public func downloadAgain() {
         guard case .problem(.folderMissing(let folder?)) = state else { return }
         cloneAndBuild(into: folder)
@@ -397,6 +443,7 @@ public final class AppUpdater: ObservableObject {
         isShowingWindow = true
         Task {
             do {
+                let release = try await latestRelease()
                 try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
                 let clone = try await runner.run(
                     gitTool,
@@ -407,6 +454,10 @@ public final class AppUpdater: ObservableObject {
                     throw UpdateProblem.failed("Couldn\u{2019}t download ProSlide from GitHub. Check your internet connection and try again.")
                 }
                 remember(target)
+                _ = try await fetchRelease(release, into: target, failure: .failed(
+                    "Couldn\u{2019}t download ProSlide \(release.version) from GitHub. Check your internet connection and try again."
+                ))
+                try await checkOut(release, in: target)
                 try await buildAndStage(target)
             } catch {
                 fail(error)
@@ -521,9 +572,8 @@ public final class AppUpdater: ObservableObject {
         }
     }
 
-    /// The folder and its branch, once it's known to be a clean ProSlide
-    /// download from the built-in address.
-    private func preparedFolder() async throws -> (URL, String) {
+    /// The folder, once it's known to be a ProSlide download from the built-in address.
+    private func preparedFolder() async throws -> URL {
         guard let folder = sourceFolder else { throw UpdateProblem.folderMissing(nil) }
         switch inspect(folder) {
         case .missing: throw UpdateProblem.folderMissing(folder)
@@ -535,42 +585,62 @@ public final class AppUpdater: ObservableObject {
         guard remote.status == 0, UpdateSource.sameRepository(address, repositoryURL) else {
             throw UpdateProblem.wrongRemote(address)
         }
-        let head = try await git(folder, ["symbolic-ref", "--short", "-q", "HEAD"])
-        let branch = head.output.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard head.status == 0, !branch.isEmpty else { throw UpdateProblem.notOnBranch(folder) }
-        return (folder, branch)
+        return folder
     }
 
-    /// Fetches the branch from the built-in address, never from the folder's own setting.
-    private func fetch(_ folder: URL, branch: String, failure: UpdateProblem) async throws {
-        let refspec = "+refs/heads/\(branch):refs/remotes/origin/\(branch)"
+    /// GitHub's newest published release.
+    private func latestRelease() async throws -> UpdateRelease {
+        let result: CommandResult
+        do {
+            result = try await runner.run(curlTool, [
+                "--silent", "--show-error", "--location",
+                "--proto", "=https", "--max-time", "30",
+                "--header", "Accept: application/vnd.github+json",
+                "--write-out", "\n%{http_code}",
+                latestReleaseURL,
+            ], idleTimeout: 45)
+        } catch {
+            throw UpdateProblem.offline
+        }
+        guard result.status == 0 else { throw UpdateProblem.offline }
+        return try UpdateSource.parseLatestRelease(result.output)
+    }
+
+    /// Fetches the release's tag from the built-in address, never from the
+    /// folder's own setting, and returns the commit it names.
+    private func fetchRelease(_ release: UpdateRelease, into folder: URL, failure: UpdateProblem) async throws -> String {
+        let refspec = "+refs/tags/\(release.tag):refs/tags/\(release.tag)"
         let result: CommandResult
         do {
             result = try await git(folder, ["fetch", "--quiet", "--no-tags", repositoryURL, refspec], timeout: 90)
         } catch {
             throw failure
         }
-        guard result.status == 0 else {
-            if result.tail.contains(where: { $0.contains("couldn't find remote ref") }) {
-                throw UpdateProblem.failed("The \u{201C}\(branch)\u{201D} branch the ProSlide folder follows isn\u{2019}t on GitHub any more.")
-            }
-            throw failure
+        guard result.status == 0 else { throw failure }
+        return try await revParse(folder, "refs/tags/\(release.tag)^{commit}")
+    }
+
+    /// Puts the folder exactly at the release, so the build is the release and
+    /// nothing else. Local branches, and anything on them, are left alone.
+    private func checkOut(_ release: UpdateRelease, in folder: URL) async throws {
+        let checkout = try await git(folder, ["checkout", "--quiet", "--detach", "refs/tags/\(release.tag)"])
+        guard checkout.status == 0 else {
+            throw UpdateProblem.failed("Couldn\u{2019}t switch the ProSlide folder to version \(release.version).")
         }
     }
 
-    private func refuseLocalChanges(_ folder: URL, branch: String) async throws {
+    private func refuseLocalChanges(_ folder: URL) async throws {
         let status = try await git(folder, ["status", "--porcelain", "--untracked-files=no"])
-        let ahead = try await git(folder, ["rev-list", "--count", "refs/remotes/origin/\(branch)..HEAD"])
-        guard status.status == 0, ahead.status == 0 else {
+        guard status.status == 0 else {
             throw UpdateProblem.failed("Couldn\u{2019}t check the ProSlide folder for changes.")
         }
-        let edited = !status.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let unpublished = ahead.output.trimmingCharacters(in: .whitespacesAndNewlines) != "0"
-        if edited || unpublished { throw UpdateProblem.localChanges(folder) }
+        if !status.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw UpdateProblem.localChanges(folder)
+        }
     }
 
-    /// The installed version's commit when the folder has it, else the folder's own.
-    private func installedBase(_ folder: URL) async throws -> String {
+    /// The installed build's commit when the folder has it, else the folder's own.
+    private func installedCommit(_ folder: URL) async throws -> String {
         if let commit = stamp.commit {
             let known = try? await git(folder, ["cat-file", "-e", "\(commit)^{commit}"])
             if known?.status == 0 { return commit }
@@ -579,7 +649,7 @@ public final class AppUpdater: ObservableObject {
     }
 
     private func revParse(_ folder: URL, _ name: String) async throws -> String {
-        let result = try await git(folder, ["rev-parse", name])
+        let result = try await git(folder, ["rev-parse", "--verify", "--quiet", name])
         let commit = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.status == 0, !commit.isEmpty else {
             throw UpdateProblem.failed("Couldn\u{2019}t read the ProSlide folder\u{2019}s version.")
