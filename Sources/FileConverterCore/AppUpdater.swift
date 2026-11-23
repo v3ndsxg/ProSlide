@@ -195,7 +195,8 @@ public enum UpdateState: Equatable, Sendable {
     case upToDate
     case available(UpdateRelease)
     case updating(UpdateStep)
-    /// Built and waiting: installs on restart, or when the app next quits.
+    /// Built. ProSlide restarts to install it as soon as nothing is running
+    /// (or, failing that, installs it when the app next quits).
     case ready
     case problem(UpdateProblem)
 }
@@ -252,8 +253,6 @@ public final class AppUpdater: ObservableObject {
     @Published public private(set) var state: UpdateState = .unknown
     /// Whether the update window is open.
     @Published public var isShowingWindow = false
-    /// The operator chose to restart once the running conversion or download ends.
-    @Published public var restartWhenIdle = false
 
     public let log: DownloadLog
     let stamp: BuildStamp
@@ -484,7 +483,6 @@ public final class AppUpdater: ObservableObject {
         }
         log.note("UPDATE READY: \(stagedApp.path)")
         state = .ready
-        isShowingWindow = true
     }
 
     // MARK: Installing

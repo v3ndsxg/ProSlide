@@ -163,7 +163,7 @@ final class AppUpdaterTests: XCTestCase {
         updater.update()
         try await waitUntil { updater.state == .ready }
 
-        XCTAssertTrue(updater.isShowingWindow, "a finished update says so")
+        XCTAssertFalse(updater.isShowingWindow, "a finished update restarts; it doesn't open the window")
         let calls = context.runner.calls
         let checkout = try XCTUnwrap(calls.firstIndex { $0.contains("checkout") })
         let build = try XCTUnwrap(calls.firstIndex { $0.first == "bash" })
